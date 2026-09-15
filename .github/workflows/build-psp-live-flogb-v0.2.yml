@@ -1,0 +1,97 @@
+name: Build PSP Live FloGB V0.2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build PSP Live FloGB V0.2 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v7
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python icon tooling
+        run: |
+          python3 -m pip install --disable-pip-version-check pillow
+
+      - name: Clone pinned PPSSPP source
+        run: |
+          git clone https://github.com/hrydgard/ppsspp.git ppsspp
+          cd ppsspp
+          git checkout 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0
+          git submodule update --init --recursive
+
+      - name: Apply PSP Live FloGB V0.2 patch
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_2.py \
+            ppsspp \
+            branding/PSP_Live_FloGB_icon_source.png
+
+      - name: Verify V0.2 patch
+        run: |
+          echo "=== APP NAME ==="
+          cat ppsspp/android/res/values/strings.xml
+
+          echo "=== APPLICATION ID ==="
+          grep -n 'applicationId' ppsspp/android/build.gradle.kts | head -n 10
+
+          echo "=== NATIVE APP NAME ==="
+          grep -n 'PSP Live FloGB' ppsspp/UI/NativeApp.cpp
+
+          echo "=== SCBD MODULE ==="
+          cat ppsspp/SCBD/SCBDViewer.h
+
+          echo "=== SCBD HUD HOOKS ==="
+          grep -n 'SCBDOverlay' \
+            ppsspp/UI/DebugOverlay.cpp \
+            ppsspp/UI/DebugOverlay.h \
+            ppsspp/UI/EmuScreen.cpp
+
+          echo "=== ICONS ==="
+          find ppsspp/android/normal/res -type f \
+            \( -name 'ic_launcher.png' \
+            -o -name 'ic_launcher_round.png' \
+            -o -name 'ic_launcher_foreground.png' \) \
+            -print
+
+      - name: Build NormalOptimized APK
+        working-directory: ppsspp
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleNormalOptimized --stacktrace
+
+      - name: Collect APK
+        run: |
+          echo "=== APK files found ==="
+          find ppsspp/android/build -type f -name "*.apk" -print
+
+          mkdir -p artifacts
+
+          APK="$(find ppsspp/android/build -type f -name "*.apk" | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK was produced."
+            exit 1
+          fi
+
+          cp "$APK" artifacts/PSP_Live_FloGB_V0_2.apk
+          ls -lh artifacts/PSP_Live_FloGB_V0_2.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: PSP-Live-FloGB-V0.2-APK
+          path: artifacts/PSP_Live_FloGB_V0_2.apk
+          if-no-files-found: error
