@@ -1,0 +1,256 @@
+name: Build PSP Live FloGB V0.5.0 Native HUD Hotfix3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PPSSPP_COMMIT: 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  NDK_CCACHE: ccache
+
+jobs:
+  build:
+    name: Build PSP Live FloGB V0.5.0 Native HUD Hotfix3 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v7
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python icon tooling
+        run: python3 -m pip install --disable-pip-version-check pillow
+
+      - name: Restore V0.4.6 native baseline cache
+        id: baseline-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/ppsspp-v046-base
+          key: ppsspp-v046-${{ env.PPSSPP_COMMIT }}-${{ hashFiles('tools/apply_psp_live_flogb_v0_3.py', 'tools/apply_psp_live_flogb_v0_4.py', 'tools/apply_psp_live_flogb_v0_4_1.py', 'tools/apply_psp_live_flogb_v0_4_2.py', 'tools/apply_psp_live_flogb_v0_4_3.py', 'tools/apply_psp_live_flogb_v0_4_4.py', 'tools/apply_psp_live_flogb_v0_4_5.py', 'tools/apply_psp_live_flogb_v0_4_6.py') }}
+
+      - name: Create V0.4.6 baseline on cache miss
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf .cache/ppsspp-v046-base
+          mkdir -p .cache
+          git clone https://github.com/hrydgard/ppsspp.git .cache/ppsspp-v046-base
+          cd .cache/ppsspp-v046-base
+          git checkout "$PPSSPP_COMMIT"
+          git submodule update --init --recursive
+          cd "$GITHUB_WORKSPACE"
+
+          python3 tools/apply_psp_live_flogb_v0_3.py .cache/ppsspp-v046-base branding/PSP_Live_FloGB_icon_source.png
+          python3 tools/apply_psp_live_flogb_v0_4.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_1.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_2.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_3.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_4.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_5.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_6.py .cache/ppsspp-v046-base
+
+      - name: Copy cached baseline to build workspace
+        run: |
+          rm -rf ppsspp
+          cp -a .cache/ppsspp-v046-base ppsspp
+
+      - name: Hotfix V0.5.0 patch boundary
+        run: |
+          python3 tools/fix_v0_5_0_controls_boundary.py
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_0.py
+          ! grep -q "controls_end = '    if (g_scbdAvatarButton)" tools/apply_psp_live_flogb_v0_5_0.py
+          grep -n 'replace V0.4.6 ranking controls safely' tools/apply_psp_live_flogb_v0_5_0.py
+
+      - name: Apply V0.5.0 Native HUD Framework
+        run: python3 tools/apply_psp_live_flogb_v0_5_0.py ppsspp
+
+      - name: Hotfix V0.5.0 PPSSPP UI API compatibility
+        run: |
+          python3 - <<'PYHOTFIX'
+          from pathlib import Path
+
+          header = Path("ppsspp/SCBD/SCBDNativeHUDScreens.h")
+          s = header.read_text(encoding="utf-8")
+          lines = s.splitlines(keepends=True)
+
+          line_replacements = {
+              "        avatar->SetScale(0.72f);": "        avatar->SetSmall(true);",
+              "            portrait->SetScale(0.62f);": "            portrait->SetSmall(true);",
+              "        row->SetScale(static_cast<float>(cfg.rankFontPct) / 100.0f);": "        row->SetSmall(cfg.rankFontPct < 100);",
+              "            row->SetScale(static_cast<float>(cfg.rankFontPct) / 100.0f);": "            row->SetSmall(cfg.rankFontPct < 100);",
+          }
+
+          seen = {key: 0 for key in line_replacements}
+          out = []
+          for line in lines:
+              bare = line.rstrip("\r\n")
+              newline = line[len(bare):]
+              if bare in line_replacements:
+                  seen[bare] += 1
+                  out.append(line_replacements[bare] + newline)
+              else:
+                  out.append(line)
+
+          bad_counts = {key: count for key, count in seen.items() if count != 1}
+          if bad_counts:
+              raise SystemExit(f"Hotfix2: unsafe TextView replacement counts: {bad_counts}")
+
+          s = "".join(out)
+          if s.count("UI::DialogResult") != 1:
+              raise SystemExit(f"Hotfix2: expected 1 UI::DialogResult, found {s.count('UI::DialogResult')}")
+          if s.count("UI::DR_OK") != 1:
+              raise SystemExit(f"Hotfix2: expected 1 UI::DR_OK, found {s.count('UI::DR_OK')}")
+          s = s.replace("UI::DialogResult", "DialogResult")
+          s = s.replace("UI::DR_OK", "DR_OK")
+
+          for forbidden in (
+              "avatar->SetScale(",
+              "portrait->SetScale(",
+              "row->SetScale(static_cast<float>(cfg.rankFontPct)",
+              "UI::DialogResult",
+              "UI::DR_OK",
+          ):
+              if forbidden in s:
+                  raise SystemExit(f"Hotfix2: forbidden API survived: {forbidden}")
+
+          if "row->SetShadow(true);" not in s:
+              raise SystemExit("Hotfix2: TextView::SetShadow unexpectedly missing")
+
+          header.write_text(s, encoding="utf-8")
+          print("V0.5.0 Hotfix2 UI API compatibility PASS")
+          PYHOTFIX
+
+      - name: Hotfix V0.5.0 PPSSPP orientation namespace
+        run: |
+          python3 - <<'PYORIENT'
+          from pathlib import Path
+
+          header = Path("ppsspp/SCBD/SCBDNativeHUDScreens.h")
+          s = header.read_text(encoding="utf-8")
+
+          bad = "UI::ORIENT_HORIZONTAL"
+          good = "ORIENT_HORIZONTAL"
+          count = s.count(bad)
+          if count != 2:
+              raise SystemExit(f"Hotfix3: expected exactly 2 {bad} occurrences, found {count}")
+
+          s = s.replace(bad, good)
+
+          if "UI::ORIENT_" in s:
+              raise SystemExit("Hotfix3: a namespaced UI::ORIENT_* token still survives")
+          if s.count("ORIENT_HORIZONTAL") < 3:
+              raise SystemExit("Hotfix3: orientation replacement produced an unexpected result")
+
+          header.write_text(s, encoding="utf-8")
+          print("V0.5.0 Hotfix3 orientation namespace PASS")
+          PYORIENT
+
+      - name: Preflight EmuScreen structure
+        run: |
+          grep -n 'const bool scbdTarget' ppsspp/UI/EmuScreen.cpp
+          grep -n 'g_scbdMatchHUDButton' ppsspp/UI/EmuScreen.cpp
+          grep -n 'g_scbdRankMenuButton' ppsspp/UI/EmuScreen.cpp
+          grep -n 'g_scbdDevButton' ppsspp/UI/EmuScreen.cpp
+          grep -n 'g_scbdNativeTestButton' ppsspp/UI/EmuScreen.cpp
+
+      - name: Preflight PPSSPP UI API compatibility
+        run: |
+          HEADER=ppsspp/SCBD/SCBDNativeHUDScreens.h
+          ! grep -q 'avatar->SetScale(' "$HEADER"
+          ! grep -q 'portrait->SetScale(' "$HEADER"
+          ! grep -q 'row->SetScale(static_cast<float>(cfg.rankFontPct)' "$HEADER"
+          ! grep -q 'UI::DialogResult' "$HEADER"
+          ! grep -q 'UI::DR_OK' "$HEADER"
+          ! grep -q 'UI::ORIENT_' "$HEADER"
+          grep -n 'ORIENT_HORIZONTAL' "$HEADER"
+          grep -n 'avatar->SetSmall(true)' "$HEADER"
+          grep -n 'portrait->SetSmall(true)' "$HEADER"
+          grep -n 'row->SetSmall(cfg.rankFontPct < 100)' "$HEADER"
+          grep -n 'void OnCompleted(DialogResult result)' "$HEADER"
+          grep -n 'result == DR_OK' "$HEADER"
+          grep -n 'row->SetShadow(true)' "$HEADER"
+
+      - name: Verify V0.5.0 source patch
+        run: |
+          test -f ppsspp/SCBD/SCBDNativeHUDConfig.h
+          test -f ppsspp/SCBD/SCBDNativeHUDScreens.h
+
+          grep -n 'MATCH HUD' ppsspp/UI/EmuScreen.cpp
+          grep -n 'RANK MENU' ppsspp/UI/EmuScreen.cpp
+          grep -n '"DEV"' ppsspp/UI/EmuScreen.cpp
+          grep -n 'TEST DATA' ppsspp/UI/EmuScreen.cpp
+
+          grep -n 'DrawSCBDMatchTop10HUD' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'NATIVE HUD V0.5.0' ppsspp/UI/DebugOverlay.cpp
+          ! grep -q 'DrawSCBDRankingPopup' ppsspp/UI/DebugOverlay.cpp
+
+          grep -n 'for (int i = 0; i < 100;' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'kCharacters\[28\]' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'CHUOI WIN' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'PopupSliderChoice' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'scbd_native_hud.ini' ppsspp/SCBD/SCBDNativeHUDConfig.h
+
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('ppsspp/**/*.gradle*', 'ppsspp/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Restore native compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v050-hotfix3
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v050-hotfix2
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v050-hotfix
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-
+
+      - name: Ensure ccache is available
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ccache
+          fi
+          ccache --version | head -n 1
+          ccache --zero-stats || true
+
+      - name: Build NormalOptimized APK
+        working-directory: ppsspp
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleNormalOptimized --stacktrace
+
+      - name: Compiler cache stats
+        if: always()
+        run: ccache --show-stats || true
+
+      - name: Collect APK
+        run: |
+          mkdir -p artifacts
+          APK="$(find ppsspp/android/build -type f -name '*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK produced."
+            exit 1
+          fi
+          cp "$APK" artifacts/PSP_Live_FloGB_V0_5_0_NativeHUD_Hotfix3.apk
+          ls -lh artifacts/PSP_Live_FloGB_V0_5_0_NativeHUD_Hotfix3.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: PSP-Live-FloGB-V0.5.0-NativeHUD-Hotfix3-APK
+          path: artifacts/PSP_Live_FloGB_V0_5_0_NativeHUD_Hotfix3.apk
+          if-no-files-found: error
