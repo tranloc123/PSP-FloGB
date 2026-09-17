@@ -1,0 +1,111 @@
+name: Build PSP Live FloGB V0.4.6 Rank Popup Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build PSP Live FloGB V0.4.6 Rank Popup Test APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v7
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python icon tooling
+        run: |
+          python3 -m pip install --disable-pip-version-check pillow
+
+      - name: Clone pinned PPSSPP source
+        run: |
+          git clone https://github.com/hrydgard/ppsspp.git ppsspp
+          cd ppsspp
+          git checkout 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0
+          git submodule update --init --recursive
+
+      - name: Apply preserved V0.3 patch
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_3.py ppsspp branding/PSP_Live_FloGB_icon_source.png
+
+      - name: Apply preserved V0.4 Bone Mapper
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_4.py ppsspp
+
+      - name: Apply preserved V0.4.1 fighter-pointer hotfix
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_4_1.py ppsspp
+
+      - name: Apply preserved V0.4.2 Adaptive Head Tracker
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_4_2.py ppsspp
+
+      - name: Apply preserved V0.4.3 Dynamic Head Avatar
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_4_3.py ppsspp
+
+      - name: Apply preserved V0.4.4 Head Picker Refinement
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_4_4.py ppsspp
+
+      - name: Apply preserved V0.4.5 Dual Team HUD Test
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_4_5.py ppsspp
+
+      - name: Apply V0.4.6 Rank Popup Test
+        run: |
+          python3 tools/apply_psp_live_flogb_v0_4_6.py ppsspp
+
+      - name: Verify V0.4.6
+        run: |
+          test -f ppsspp/SCBD/SCBDAvatarState.h
+          test -f ppsspp/SCBD/SCBDRankPanelState.h
+          grep -n 'RANK PANEL' ppsspp/UI/EmuScreen.cpp
+          grep -n 'TEST HIEN THI' ppsspp/UI/EmuScreen.cpp
+          grep -n 'TAB >' ppsspp/UI/EmuScreen.cpp
+          grep -n 'DrawSCBDRankingPopup' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'BXH TRAN DAU - TEAM P1' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'TOP TUAN' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'TOP THANG' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'TOP NHAN VAT' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'RANK V0.4.6' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'PickSCBDRefinedHead' ppsspp/UI/DebugOverlay.cpp
+          ! grep -q 'DrawSCBDTeamHUD' ppsspp/UI/DebugOverlay.cpp
+          cat ppsspp/PSP_LIVE_FLOGB_BUILD_INFO.txt
+
+      - name: Python syntax check
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_4_6.py
+
+      - name: Build NormalOptimized APK
+        working-directory: ppsspp
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleNormalOptimized --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p artifacts
+          APK="$(find ppsspp/android/build -type f -name "*.apk" | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK produced."
+            exit 1
+          fi
+          cp "$APK" artifacts/PSP_Live_FloGB_V0_4_6_RankPopup_Test.apk
+          ls -lh artifacts/PSP_Live_FloGB_V0_4_6_RankPopup_Test.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: PSP-Live-FloGB-V0.4.6-RankPopup-Test-APK
+          path: artifacts/PSP_Live_FloGB_V0_4_6_RankPopup_Test.apk
+          if-no-files-found: error
