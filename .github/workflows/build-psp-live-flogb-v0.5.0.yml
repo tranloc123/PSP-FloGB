@@ -1,0 +1,148 @@
+name: Build PSP Live FloGB V0.5.0 Native HUD Framework
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PPSSPP_COMMIT: 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  NDK_CCACHE: ccache
+
+jobs:
+  build:
+    name: Build PSP Live FloGB V0.5.0 Native HUD Framework APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v7
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python icon tooling
+        run: python3 -m pip install --disable-pip-version-check pillow
+
+      # Cache the already-patched V0.4.6 PPSSPP baseline.
+      # Future V0.5.x runs no longer need to clone + replay V0.3 -> V0.4.6.
+      - name: Restore V0.4.6 native baseline cache
+        id: baseline-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/ppsspp-v046-base
+          key: ppsspp-v046-${{ env.PPSSPP_COMMIT }}-${{ hashFiles('tools/apply_psp_live_flogb_v0_3.py', 'tools/apply_psp_live_flogb_v0_4.py', 'tools/apply_psp_live_flogb_v0_4_1.py', 'tools/apply_psp_live_flogb_v0_4_2.py', 'tools/apply_psp_live_flogb_v0_4_3.py', 'tools/apply_psp_live_flogb_v0_4_4.py', 'tools/apply_psp_live_flogb_v0_4_5.py', 'tools/apply_psp_live_flogb_v0_4_6.py') }}
+
+      - name: Create V0.4.6 baseline on cache miss
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf .cache/ppsspp-v046-base
+          mkdir -p .cache
+          git clone https://github.com/hrydgard/ppsspp.git .cache/ppsspp-v046-base
+          cd .cache/ppsspp-v046-base
+          git checkout "$PPSSPP_COMMIT"
+          git submodule update --init --recursive
+          cd "$GITHUB_WORKSPACE"
+
+          python3 tools/apply_psp_live_flogb_v0_3.py .cache/ppsspp-v046-base branding/PSP_Live_FloGB_icon_source.png
+          python3 tools/apply_psp_live_flogb_v0_4.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_1.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_2.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_3.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_4.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_5.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_6.py .cache/ppsspp-v046-base
+
+      - name: Copy cached baseline to build workspace
+        run: |
+          rm -rf ppsspp
+          cp -a .cache/ppsspp-v046-base ppsspp
+
+      - name: Apply V0.5.0 Native HUD Framework
+        run: python3 tools/apply_psp_live_flogb_v0_5_0.py ppsspp
+
+      - name: Python syntax check
+        run: python3 -m py_compile tools/apply_psp_live_flogb_v0_5_0.py
+
+      - name: Verify V0.5.0 source patch
+        run: |
+          test -f ppsspp/SCBD/SCBDNativeHUDConfig.h
+          test -f ppsspp/SCBD/SCBDNativeHUDScreens.h
+
+          grep -n 'MATCH HUD' ppsspp/UI/EmuScreen.cpp
+          grep -n 'RANK MENU' ppsspp/UI/EmuScreen.cpp
+          grep -n '"DEV"' ppsspp/UI/EmuScreen.cpp
+          grep -n 'TEST DATA' ppsspp/UI/EmuScreen.cpp
+
+          grep -n 'DrawSCBDMatchTop10HUD' ppsspp/UI/DebugOverlay.cpp
+          grep -n 'NATIVE HUD V0.5.0' ppsspp/UI/DebugOverlay.cpp
+          ! grep -q 'DrawSCBDRankingPopup' ppsspp/UI/DebugOverlay.cpp
+
+          grep -n 'for (int i = 0; i < 100;' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'kCharacters\[28\]' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'CHUOI WIN' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'PopupSliderChoice' ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'scbd_native_hud.ini' ppsspp/SCBD/SCBDNativeHUDConfig.h
+
+          cat ppsspp/PSP_LIVE_FLOGB_BUILD_INFO.txt
+
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('ppsspp/**/*.gradle*', 'ppsspp/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Restore native compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v050
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-
+
+      - name: Ensure ccache is available
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ccache
+          fi
+          ccache --version | head -n 1
+          ccache --zero-stats || true
+
+      - name: Build NormalOptimized APK
+        working-directory: ppsspp
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleNormalOptimized --stacktrace
+
+      - name: Compiler cache stats
+        if: always()
+        run: ccache --show-stats || true
+
+      - name: Collect APK
+        run: |
+          mkdir -p artifacts
+          APK="$(find ppsspp/android/build -type f -name '*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK produced."
+            exit 1
+          fi
+          cp "$APK" artifacts/PSP_Live_FloGB_V0_5_0_NativeHUD_Framework.apk
+          ls -lh artifacts/PSP_Live_FloGB_V0_5_0_NativeHUD_Framework.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: PSP-Live-FloGB-V0.5.0-NativeHUD-Framework-APK
+          path: artifacts/PSP_Live_FloGB_V0_5_0_NativeHUD_Framework.apk
+          if-no-files-found: error
