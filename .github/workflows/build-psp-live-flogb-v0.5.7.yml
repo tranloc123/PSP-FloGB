@@ -1,0 +1,417 @@
+name: Build PSP Live FloGB V0.5.7 Runtime Core Native Winner V1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PPSSPP_COMMIT: 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  NDK_CCACHE: ccache
+
+jobs:
+  build:
+    name: Build PSP Live FloGB V0.5.7 Runtime Core Native Winner V1 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python icon tooling
+        run: python3 -m pip install --disable-pip-version-check pillow numpy
+
+      - name: Restore V0.4.6 native baseline cache
+        id: baseline-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/ppsspp-v046-base
+          key: ppsspp-v046-${{ env.PPSSPP_COMMIT }}-${{ hashFiles('tools/apply_psp_live_flogb_v0_3.py', 'tools/apply_psp_live_flogb_v0_4.py', 'tools/apply_psp_live_flogb_v0_4_1.py', 'tools/apply_psp_live_flogb_v0_4_2.py', 'tools/apply_psp_live_flogb_v0_4_3.py', 'tools/apply_psp_live_flogb_v0_4_4.py', 'tools/apply_psp_live_flogb_v0_4_5.py', 'tools/apply_psp_live_flogb_v0_4_6.py') }}
+
+      - name: Create V0.4.6 baseline on cache miss
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf .cache/ppsspp-v046-base
+          mkdir -p .cache
+          git clone https://github.com/hrydgard/ppsspp.git .cache/ppsspp-v046-base
+          cd .cache/ppsspp-v046-base
+          git checkout "$PPSSPP_COMMIT"
+          git submodule update --init --recursive
+          cd "$GITHUB_WORKSPACE"
+
+          python3 tools/apply_psp_live_flogb_v0_3.py .cache/ppsspp-v046-base branding/PSP_Live_FloGB_icon_source.png
+          python3 tools/apply_psp_live_flogb_v0_4.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_1.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_2.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_3.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_4.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_5.py .cache/ppsspp-v046-base
+          python3 tools/apply_psp_live_flogb_v0_4_6.py .cache/ppsspp-v046-base
+
+      - name: Copy cached baseline to build workspace
+        run: |
+          rm -rf ppsspp
+          cp -a .cache/ppsspp-v046-base ppsspp
+
+      - name: Hotfix V0.5.0 patch boundary
+        run: |
+          python3 tools/fix_v0_5_0_controls_boundary.py
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_0.py
+          ! grep -q "controls_end = '    if (g_scbdAvatarButton)" tools/apply_psp_live_flogb_v0_5_0.py
+          grep -n 'replace V0.4.6 ranking controls safely' tools/apply_psp_live_flogb_v0_5_0.py
+
+      - name: Apply V0.5.0 Native HUD Framework
+        run: python3 tools/apply_psp_live_flogb_v0_5_0.py ppsspp
+
+      - name: Apply cumulative V0.5.0 API hotfixes
+        run: |
+          python3 - <<'PYFIX'
+          from pathlib import Path
+
+          header = Path("ppsspp/SCBD/SCBDNativeHUDScreens.h")
+          s = header.read_text(encoding="utf-8")
+          lines = s.splitlines(keepends=True)
+
+          line_replacements = {
+              "        avatar->SetScale(0.72f);": "        avatar->SetSmall(true);",
+              "            portrait->SetScale(0.62f);": "            portrait->SetSmall(true);",
+              "        row->SetScale(static_cast<float>(cfg.rankFontPct) / 100.0f);": "        row->SetSmall(cfg.rankFontPct < 100);",
+              "            row->SetScale(static_cast<float>(cfg.rankFontPct) / 100.0f);": "            row->SetSmall(cfg.rankFontPct < 100);",
+          }
+
+          seen = {key: 0 for key in line_replacements}
+          out = []
+          for line in lines:
+              bare = line.rstrip("\r\n")
+              newline = line[len(bare):]
+              if bare in line_replacements:
+                  seen[bare] += 1
+                  out.append(line_replacements[bare] + newline)
+              else:
+                  out.append(line)
+
+          bad = {key: count for key, count in seen.items() if count != 1}
+          if bad:
+              raise SystemExit(f"V0.5.2: unsafe UI compatibility counts: {bad}")
+
+          s = "".join(out)
+          if s.count("UI::DialogResult") != 1 or s.count("UI::DR_OK") != 1:
+              raise SystemExit("V0.5.2: DialogResult compatibility marker mismatch")
+          s = s.replace("UI::DialogResult", "DialogResult")
+          s = s.replace("UI::DR_OK", "DR_OK")
+
+          if s.count("UI::ORIENT_HORIZONTAL") != 2:
+              raise SystemExit(f"V0.5.2: expected 2 UI::ORIENT_HORIZONTAL, found {s.count('UI::ORIENT_HORIZONTAL')}")
+          s = s.replace("UI::ORIENT_HORIZONTAL", "ORIENT_HORIZONTAL")
+          header.write_text(s, encoding="utf-8")
+
+          cpp = Path("ppsspp/UI/DebugOverlay.cpp")
+          c = cpp.read_text(encoding="utf-8")
+          old = "    const Config &cfg = Cfg();"
+          new = "    const auto &cfg = SCBDNativeHUD::Cfg();"
+          if c.count(old) != 1:
+              raise SystemExit(f"V0.5.2: expected one ambiguous Config declaration, found {c.count(old)}")
+          c = c.replace(old, new, 1)
+          cpp.write_text(c, encoding="utf-8")
+          print("Cumulative V0.5.0 API hotfixes PASS")
+          PYFIX
+
+      - name: Apply V0.5.0 Hotfix5 In-Game Layer Manager
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_0_hotfix5.py
+          python3 tools/apply_psp_live_flogb_v0_5_0_hotfix5.py ppsspp
+
+      - name: Apply V0.5.1 Transparent Top5 Battle HUD
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_1.py
+          python3 tools/apply_psp_live_flogb_v0_5_1.py ppsspp
+
+      - name: Apply V0.5.2 Global Ranking Avatar Layout
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_2.py
+          python3 tools/apply_psp_live_flogb_v0_5_2.py ppsspp
+
+      - name: Build V0.5.3 character portrait atlas
+        run: |
+          python3 -m py_compile tools/build_scbd_character_atlas_v053.py
+          python3 tools/build_scbd_character_atlas_v053.py \
+            branding/SCBD_character_sheet_v053.png \
+            ppsspp/assets/scbd/characters/character_portraits_atlas.png
+          python3 - <<'PYATLAS'
+          from PIL import Image
+          p = "ppsspp/assets/scbd/characters/character_portraits_atlas.png"
+          img = Image.open(p)
+          if img.size != (1260, 480):
+              raise SystemExit(f"Unexpected atlas size: {img.size}")
+          print("V0.5.3 portrait atlas PASS:", img.size)
+          PYATLAS
+
+      - name: Apply V0.5.3 Character Portrait Integration
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_3.py
+          python3 tools/apply_psp_live_flogb_v0_5_3.py ppsspp
+
+      - name: Build V0.5.4a tier rank-frame atlas
+        run: |
+          python3 -m py_compile tools/build_scbd_rank_frame_atlas_v054a.py
+          python3 tools/build_scbd_rank_frame_atlas_v054a.py \
+            branding/SCBD_rank_frames_v054a.jpg \
+            ppsspp/assets/scbd/rank_frames/rank_frames_atlas.png
+          python3 - <<'PYFRAME'
+          from PIL import Image
+          p = "ppsspp/assets/scbd/rank_frames/rank_frames_atlas.png"
+          img = Image.open(p)
+          if img.size != (1540, 220):
+              raise SystemExit(f"Unexpected rank-frame atlas size: {img.size}")
+          print("V0.5.4a rank-frame atlas PASS:", img.size)
+          PYFRAME
+
+      - name: Apply V0.5.4a Tier Rank Frames
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_4a.py
+          python3 tools/apply_psp_live_flogb_v0_5_4a.py ppsspp
+
+      - name: Install V0.5.5 rendered rank-number atlas
+        run: |
+          mkdir -p ppsspp/assets/scbd/rank_numbers
+          cp branding/SCBD_rank_numbers_v055.png ppsspp/assets/scbd/rank_numbers/rank_numbers_atlas.png
+          python3 - <<'PYNUM'
+          from PIL import Image
+          p = "ppsspp/assets/scbd/rank_numbers/rank_numbers_atlas.png"
+          img = Image.open(p)
+          if img.size != (640, 96):
+              raise SystemExit(f"Unexpected rank-number atlas size: {img.size}")
+          print("V0.5.5 rank-number atlas PASS:", img.size)
+          PYNUM
+
+      - name: Apply V0.5.5 Character Ranking Visual Match
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_5.py
+          python3 tools/apply_psp_live_flogb_v0_5_5.py ppsspp
+
+      - name: Install V0.5.6 clean RGBA rank-frame atlas
+        run: |
+          mkdir -p ppsspp/assets/scbd/rank_frames
+          cp branding/SCBD_rank_frames_v056.png ppsspp/assets/scbd/rank_frames/rank_frames_atlas.png
+          python3 - <<'PYFRAME56'
+          from PIL import Image
+          p = "ppsspp/assets/scbd/rank_frames/rank_frames_atlas.png"
+          img = Image.open(p).convert("RGBA")
+          if img.size != (1792, 256):
+              raise SystemExit(f"Unexpected V0.5.6 frame atlas size: {img.size}")
+          a = img.getchannel("A")
+          for i in range(7):
+              tile = a.crop((i * 256, 0, (i + 1) * 256, 256))
+              if tile.crop((0, 0, 256, 6)).getbbox():
+                  raise SystemExit(f"Tier {i}: dirty top gutter")
+              if tile.crop((0, 250, 256, 256)).getbbox():
+                  raise SystemExit(f"Tier {i}: dirty bottom gutter")
+              if tile.crop((0, 0, 6, 256)).getbbox():
+                  raise SystemExit(f"Tier {i}: dirty left gutter")
+              if tile.crop((250, 0, 256, 256)).getbbox():
+                  raise SystemExit(f"Tier {i}: dirty right gutter")
+          print("V0.5.6 clean rank-frame atlas PASS:", img.size)
+          PYFRAME56
+
+      - name: Apply V0.5.6 Clean Rank Frames Preview Match
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_6.py
+          python3 tools/apply_psp_live_flogb_v0_5_6.py ppsspp
+
+      - name: Apply V0.5.7 Runtime Core + Native Winner V1
+        run: |
+          python3 -m py_compile tools/apply_psp_live_flogb_v0_5_7.py
+          python3 tools/apply_psp_live_flogb_v0_5_7.py ppsspp
+
+      - name: Preflight V0.5.7 runtime core
+        run: |
+          STATE=ppsspp/SCBD/SCBDInGameLayerState.h
+          INPUT=ppsspp/SCBD/SCBDVirtualInput.h
+          WINNER=ppsspp/SCBD/SCBDNativeWinner.h
+          DEBUG=ppsspp/UI/DebugOverlay.cpp
+          EMU=ppsspp/UI/EmuScreen.cpp
+
+          test -f "$STATE"
+          test -f "$INPUT"
+          test -f "$WINNER"
+
+          grep -n 'WINNER_TEST = 5' "$STATE"
+          grep -n 'INPUT_TEST = 6' "$STATE"
+          grep -n '__CtrlUpdateButtons' "$INPUT"
+          grep -n 'QueueSequence' "$INPUT"
+          grep -n 'BeginWinnerPick' "$WINNER"
+          grep -n '15000' "$WINNER"
+
+          grep -n 'SCBD_LEGACY_MEMORY_INSPECTOR_VISIBLE = false' "$DEBUG"
+          grep -n 'DrawSCBDNativeWinnerLayer' "$DEBUG"
+          grep -n 'PICK THANH CONG!' "$DEBUG"
+          grep -n 'WINNER TEST' "$DEBUG"
+          grep -n 'INPUT LAB' "$DEBUG"
+          grep -n 'SCBDVirtualInput::Process();' "$DEBUG"
+          grep -n 'SCBDNativeWinner::Process();' "$DEBUG"
+
+          grep -n 'SCBDNativeWinner::BeginWinnerPick' "$EMU"
+          grep -n 'CTRL_TRIANGLE | CTRL_CROSS' "$EMU"
+          grep -n 'CTRL_TRIANGLE | CTRL_CIRCLE' "$EMU"
+          grep -n 'CTRL_SQUARE | CTRL_TRIANGLE' "$EMU"
+
+          # Frozen V0.5.6 visual baseline must survive this infrastructure build.
+          grep -n 'kSCBDRankFrameTuning\[7\]' "$DEBUG"
+          grep -n 'radius \* 0.78f' "$DEBUG"
+          grep -n 'active != 3' "$DEBUG"
+          grep -n 'slot + 1, true' "$DEBUG"
+          grep -n 'DrawSCBDMatchTop5HUD' "$DEBUG"
+
+      - name: Preflight V0.5.6 clean-frame rules
+        run: |
+          DEBUG=ppsspp/UI/DebugOverlay.cpp
+          grep -n '{3.35f, 0.0f, 0.0f}' "$DEBUG"
+          grep -n 'radius \* 0.78f' "$DEBUG"
+          grep -n 'active != 3' "$DEBUG"
+          grep -n 'slot + 1, true' "$DEBUG"
+          ! grep -q 'DrawSCBDRankFrame(ctx, i + 1, avatarX, cy, radius);' "$DEBUG"
+
+      - name: Preflight V0.5.5 visual rules
+        run: |
+          DEBUG=ppsspp/UI/DebugOverlay.cpp
+          test -f ppsspp/assets/scbd/rank_numbers/rank_numbers_atlas.png
+          grep -n 'kSCBDRankFrameTuning\[7\]' "$DEBUG"
+          grep -n 'active != 3' "$DEBUG"
+          grep -n 'slot + 1, true' "$DEBUG"
+          grep -n 'DrawSCBDRankNumber' "$DEBUG"
+          grep -n 'rank_numbers_atlas.png' "$DEBUG"
+          grep -n 'portraitW = 62.0f' "$DEBUG"
+          grep -n 'kInsetUPx = 6.0f' "$DEBUG"
+          ! grep -q 'DrawSCBDRankFrame(ctx, i + 1, avatarX, cy, radius);' "$DEBUG"
+          ! grep -q 'DrawText(font, rankText, list.x + 12.0f' "$DEBUG"
+
+      - name: Preflight V0.5.4a rank-frame tiers
+        run: |
+          DEBUG=ppsspp/UI/DebugOverlay.cpp
+          test -f ppsspp/assets/scbd/rank_frames/rank_frames_atlas.png
+          grep -n 'SCBDRankFrameTierIndex' "$DEBUG"
+          grep -n 'rank_frames_atlas.png' "$DEBUG"
+          grep -n 'if (rank <= 10) return 3' "$DEBUG"
+          grep -n 'if (rank <= 30) return 4' "$DEBUG"
+          grep -n 'if (rank <= 70) return 5' "$DEBUG"
+          ! grep -q 'DrawSCBDRankFrame(ctx, i + 1, avatarX, cy, radius);' "$DEBUG"
+          grep -n '10.5f, slot + 1, true' "$DEBUG"
+          grep -n '11.0f, i + 1, active != 3' "$DEBUG"
+
+      - name: Preflight V0.5.3 character portraits
+        run: |
+          DEBUG=ppsspp/UI/DebugOverlay.cpp
+          test -f ppsspp/assets/scbd/characters/character_portraits_atlas.png
+          grep -n 'Common/Render/ManagedTexture.h' "$DEBUG"
+          grep -n 'GetSCBDCharacterPortraitAtlas' "$DEBUG"
+          grep -n 'character_portraits_atlas.png' "$DEBUG"
+          grep -n 'CreateTextureFromFile' "$DEBUG"
+          grep -n 'DrawTexRect' "$DEBUG"
+          grep -n 'portraitW = 62.0f' "$DEBUG"
+          grep -n 'kCols = 7' "$DEBUG"
+          grep -n 'kRows = 4' "$DEBUG"
+
+      - name: Preflight V0.5.2 ranking avatar layout
+        run: |
+          DEBUG=ppsspp/UI/DebugOverlay.cpp
+          grep -n 'struct SCBDRankAvatarMock' "$DEBUG"
+          grep -n 'DrawSCBDRankAvatar' "$DEBUG"
+          grep -n 'DrawSCBDCharacterPortraitSlot' "$DEBUG"
+          grep -n 'DrawSCBDRankNumber' "$DEBUG"
+          grep -n 'userColumnW \* slot' "$DEBUG"
+          grep -n '"%d WIN"' "$DEBUG"
+          ! grep -q '"#%03d \[AV\] %-12s %d"' "$DEBUG"
+          ! grep -q '"#%03d \[AV\] %-12s CURRENT:%d BEST:%d"' "$DEBUG"
+          ! grep -q '"%02d. %-12s : %s - %s - %s"' "$DEBUG"
+
+      - name: Preflight V0.5.1 battle HUD preserved
+        run: |
+          DEBUG=ppsspp/UI/DebugOverlay.cpp
+          grep -n 'SCBD_TOP5_LIMIT = 5' "$DEBUG"
+          grep -n 'DrawSCBDMatchTop5HUD' "$DEBUG"
+          grep -n 'DrawSCBDTransparentTop5List' "$DEBUG"
+          grep -n 'TEST AVATAR BXH' "$DEBUG"
+          ! grep -q 'DrawSCBDMatchTop10HUD' "$DEBUG"
+
+      - name: Preflight layer safety and source structure
+        run: |
+          test -f ppsspp/SCBD/SCBDInGameLayerState.h
+          test -f ppsspp/SCBD/SCBDNativeHUDConfig.h
+          test -f ppsspp/SCBD/SCBDNativeHUDScreens.h
+          grep -n 'HandleSCBDLayerTouch' ppsspp/UI/EmuScreen.cpp
+          grep -n 'DrawSCBDInGameLayer' ppsspp/UI/DebugOverlay.cpp
+          ! grep -q 'screenManager()->push(new SCBDNativeRankScreen' ppsspp/UI/EmuScreen.cpp
+          ! grep -q 'screenManager()->push(new SCBDNativeDevScreen' ppsspp/UI/EmuScreen.cpp
+          grep -n 'const bool scbdTarget' ppsspp/UI/EmuScreen.cpp
+          grep -n 'const auto &cfg = SCBDNativeHUD::Cfg();' ppsspp/UI/DebugOverlay.cpp
+
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('ppsspp/**/*.gradle*', 'ppsspp/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Restore native compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v057-runtime-core-native-winner-v1
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v056-clean-rank-frames
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v053-character-portraits
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v052-global-rank-avatars
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v051-top5
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-v050-hotfix4
+            ccache-${{ runner.os }}-${{ env.PPSSPP_COMMIT }}-
+
+      - name: Ensure ccache is available
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ccache
+          fi
+          ccache --version | head -n 1
+          ccache --zero-stats || true
+
+      - name: Build NormalOptimized APK
+        working-directory: ppsspp
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleNormalOptimized --stacktrace
+
+      - name: Compiler cache stats
+        if: always()
+        run: ccache --show-stats || true
+
+      - name: Collect APK
+        run: |
+          mkdir -p artifacts
+          APK="$(find ppsspp/android/build -type f -name '*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK produced."
+            exit 1
+          fi
+          cp "$APK" artifacts/PSP_Live_FloGB_V0_5_7_Runtime_Core_Native_Winner_V1.apk
+          ls -lh artifacts/PSP_Live_FloGB_V0_5_7_Runtime_Core_Native_Winner_V1.apk
+          unzip -l artifacts/PSP_Live_FloGB_V0_5_7_Runtime_Core_Native_Winner_V1.apk | grep 'assets/scbd/characters/character_portraits_atlas.png'
+          unzip -l artifacts/PSP_Live_FloGB_V0_5_7_Runtime_Core_Native_Winner_V1.apk | grep 'assets/scbd/rank_frames/rank_frames_atlas.png' 
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSP-Live-FloGB-V0.5.7-Runtime-Core-Native-Winner-V1-APK
+          path: artifacts/PSP_Live_FloGB_V0_5_7_Runtime_Core_Native_Winner_V1.apk
+          if-no-files-found: error
