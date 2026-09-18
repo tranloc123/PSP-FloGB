@@ -28,7 +28,7 @@ jobs:
           java-version: '17'
 
       - name: Setup Python icon tooling
-        run: python3 -m pip install --disable-pip-version-check pillow
+        run: python3 -m pip install --disable-pip-version-check pillow numpy
 
       - name: Restore V0.4.6 native baseline cache
         id: baseline-cache
@@ -160,7 +160,7 @@ jobs:
           python3 -m py_compile tools/apply_psp_live_flogb_v0_5_3.py
           python3 tools/apply_psp_live_flogb_v0_5_3.py ppsspp
 
-      - name: Build V0.5.4 tier rank-frame atlas
+      - name: Build V0.5.4a tier rank-frame atlas
         run: |
           python3 -m py_compile tools/build_scbd_rank_frame_atlas_v054a.py
           python3 tools/build_scbd_rank_frame_atlas_v054a.py \
@@ -172,15 +172,15 @@ jobs:
           img = Image.open(p)
           if img.size != (1540, 220):
               raise SystemExit(f"Unexpected rank-frame atlas size: {img.size}")
-          print("V0.5.4 rank-frame atlas PASS:", img.size)
+          print("V0.5.4a rank-frame atlas PASS:", img.size)
           PYFRAME
 
-      - name: Apply V0.5.4 Tier Rank Frames
+      - name: Apply V0.5.4a Tier Rank Frames
         run: |
           python3 -m py_compile tools/apply_psp_live_flogb_v0_5_4a.py
           python3 tools/apply_psp_live_flogb_v0_5_4a.py ppsspp
 
-      - name: Preflight V0.5.4 rank-frame tiers
+      - name: Preflight V0.5.4a rank-frame tiers
         run: |
           DEBUG=ppsspp/UI/DebugOverlay.cpp
           test -f ppsspp/assets/scbd/rank_frames/rank_frames_atlas.png
