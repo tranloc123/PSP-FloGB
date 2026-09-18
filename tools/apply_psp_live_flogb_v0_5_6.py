@@ -25,8 +25,8 @@ s = debug.read_text(encoding="utf-8")
 
 for marker in (
     "kSCBDRankFrameTuning[7]",
-    "avatarDrawRadius",
-    "SCBDPreviewRankColor" if "SCBDPreviewRankColor" in s else "DrawSCBDRankNumber",
+    "DrawSCBDRankAvatar",
+    "DrawSCBDRankNumber",
     "active != 3",
     "slot + 1, true",
 ):
@@ -55,13 +55,84 @@ new_tuning = """static const SCBDRankFrameTuning kSCBDRankFrameTuning[7] = {
 """
 s = replace_once(s, old_tuning, new_tuning, "clean centered tier-frame tuning")
 
-old_radius = "    const float avatarDrawRadius = showTierFrame ? radius * 0.80f : radius;\n"
-if old_radius not in s:
-    old_radius = "    const float avatarDrawRadius = showTierFrame ? radius * 0.80f : radius;\n"
+old_avatar_draw = r"""static void DrawSCBDRankAvatar(
+    UIContext *ctx,
+    FontID font,
+    const SCBDRankAvatarMock &user,
+    float cx,
+    float cy,
+    float radius,
+    int rank,
+    bool showTierFrame
+) {
+    ctx->Flush();
+    ctx->BeginNoTex();
+    ctx->Draw()->FillCircle(cx, cy, radius + 1.0f, 32, 0xD0101218);
+    ctx->Draw()->FillCircle(cx, cy, radius, 32, user.color);
+    ctx->Flush();
+
+    if (showTierFrame)
+        DrawSCBDRankFrame(ctx, rank, cx, cy, radius);
+
+    ctx->Begin();
+    ctx->BindFontTexture();
+    ctx->Draw()->SetFontScale(
+        radius <= 10.0f ? 0.24f : 0.28f,
+        radius <= 10.0f ? 0.24f : 0.28f
+    );
+    ctx->Draw()->DrawText(
+        font,
+        user.initial,
+        cx,
+        cy,
+        0xFFFFFFFF,
+        ALIGN_CENTER | FLAG_DYNAMIC_ASCII
+    );
+}
+"""
+
+new_avatar_draw = r"""static void DrawSCBDRankAvatar(
+    UIContext *ctx,
+    FontID font,
+    const SCBDRankAvatarMock &user,
+    float cx,
+    float cy,
+    float radius,
+    int rank,
+    bool showTierFrame
+) {
+    const float avatarDrawRadius = showTierFrame ? radius * 0.78f : radius;
+
+    ctx->Flush();
+    ctx->BeginNoTex();
+    ctx->Draw()->FillCircle(cx, cy, avatarDrawRadius + 1.0f, 32, 0xD0101218);
+    ctx->Draw()->FillCircle(cx, cy, avatarDrawRadius, 32, user.color);
+    ctx->Flush();
+
+    if (showTierFrame)
+        DrawSCBDRankFrame(ctx, rank, cx, cy, radius);
+
+    ctx->Begin();
+    ctx->BindFontTexture();
+    ctx->Draw()->SetFontScale(
+        avatarDrawRadius <= 10.0f ? 0.24f : 0.28f,
+        avatarDrawRadius <= 10.0f ? 0.24f : 0.28f
+    );
+    ctx->Draw()->DrawText(
+        font,
+        user.initial,
+        cx,
+        cy,
+        0xFFFFFFFF,
+        ALIGN_CENTER | FLAG_DYNAMIC_ASCII
+    );
+}
+"""
+
 s = replace_once(
     s,
-    old_radius,
-    "    const float avatarDrawRadius = showTierFrame ? radius * 0.78f : radius;\n",
+    old_avatar_draw,
+    new_avatar_draw,
     "avatar inset for new ornate frames",
 )
 
