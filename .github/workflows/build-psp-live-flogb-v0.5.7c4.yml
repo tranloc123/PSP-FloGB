@@ -220,12 +220,12 @@ jobs:
         run: |
           python3 -m py_compile tools/apply_psp_live_flogb_v0_5_7c3.py
           python3 tools/apply_psp_live_flogb_v0_5_7c3.py ppsspp
-      - name: Apply V0.5.7C4 Dynamic Layer Polish Pass 1
+      - name: Apply V0.5.7C4 Dynamic Layer Polish Pass 1 HOTFIX1
         run: |
           python3 -m py_compile tools/apply_psp_live_flogb_v0_5_7c4.py
           python3 tools/apply_psp_live_flogb_v0_5_7c4.py ppsspp
 
-      - name: Preflight V0.5.7C4 Dynamic Layer Polish Pass 1
+      - name: Preflight V0.5.7C4 Dynamic Layer Polish Pass 1 HOTFIX1
         run: |
           DEBUG=ppsspp/UI/DebugOverlay.cpp
           ASSETROOT=ppsspp/assets/scbd/winner_asset_v057c4
@@ -314,11 +314,11 @@ jobs:
           fi
           cp "$APK" artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk
           ls -lh artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk
-          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c3/victory_final.png'
-          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c3/pick_final.png'
-          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c3/locked_final.png'
-          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c3/timeout_final.png'
-          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c3/splash_10_kratos.png'
+          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c4/victory_final.png'
+          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c4/pick_final.png'
+          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c4/locked_final.png'
+          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c4/timeout_final.png'
+          unzip -l artifacts/PSP_Live_FloGB_V0_5_7C4_Dynamic_Layer_Polish_Pass_1.apk | grep 'assets/scbd/winner_asset_v057c4/splash_10_kratos.png'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
