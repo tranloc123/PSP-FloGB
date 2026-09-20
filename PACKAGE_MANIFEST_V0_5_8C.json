@@ -1,0 +1,50 @@
+{
+  "version": "V0.5.8C",
+  "files": [
+    {
+      "path": ".github/workflows/build-psp-live-flogb-v0.5.8c.yml",
+      "bytes": 20644,
+      "sha256": "6534e604c7320e0653701ec3fbb97ea25a3e24a2318199218fa60b48786d9c1d"
+    },
+    {
+      "path": "tools/apply_psp_live_flogb_v0_5_8c.py",
+      "bytes": 38915,
+      "sha256": "d77cb3c0770cf38e582aeeefa2ed5a824640f0b8cb8d2cf54550280e2b226c31"
+    },
+    {
+      "path": "branding/SCBD_character_portraits_ranking_v058c.png",
+      "bytes": 1435851,
+      "sha256": "061c03df2fff58334fd28f9d061aa98741723ba8c6d3005b6dbb0a9ce3a5e871"
+    },
+    {
+      "path": "branding/SCBD_pick_portraits_exact_v058c.png",
+      "bytes": 678627,
+      "sha256": "c07ff0a7a1ab36c80e3f0107b6a0bb3c0d7be28461b3639877bd0c6b237daea2"
+    },
+    {
+      "path": "branding/SCBD_royal_unicode_atlas_v058c.png",
+      "bytes": 835311,
+      "sha256": "ffb735f87d00ddbe37c0bdf08a3f2afee4a86175c51f6dc167d9e53e6cebd72b"
+    },
+    {
+      "path": "branding/SCBD_timer_digits_v058c.png",
+      "bytes": 51166,
+      "sha256": "b34f82bb8b4f7a5c465c6bee233b22804f42378fc7e70765c121842c306bb0c2"
+    },
+    {
+      "path": "branding/SCBD_v058c_font_mapping.json",
+      "bytes": 8074,
+      "sha256": "19e4aa4deeb454b780505b351ac0c9e8bd46b3af045ad4d1c15d7e52705ee443"
+    },
+    {
+      "path": "README_V0_5_8C.md",
+      "bytes": 4169,
+      "sha256": "48462a888d5c96ca87b059b53d6a9ebea5dbf1cafd6c25fafe7800113b165ac2"
+    },
+    {
+      "path": "docs/V058C_FONT_MAPPING_PREVIEW.png",
+      "bytes": 142236,
+      "sha256": "833c5bb996b14f03670be59d6cc2ee4e648dd9ac9cab788d0af8100d5921a56e"
+    }
+  ]
+}
