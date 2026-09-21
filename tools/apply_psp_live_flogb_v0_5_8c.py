@@ -171,7 +171,7 @@ with info.open("a", encoding="utf-8") as f:
     )
 
 
-# HOTFIX2 source-safety checks.
+# HOTFIX3 source-safety checks: ignore comments, detect only real FillCircle calls.
 if "HOTFIX2 Locked In clean dynamic fields" not in final:
     raise SystemExit("V0.5.8C HOTFIX2 safety failure: Locked In fix missing")
 if "DrawSCBDFinalAvatar(ctx, font, X(544.0f), Y(451.0f)" not in final:
@@ -182,7 +182,7 @@ if "DrawSCBDFinalAvatar(ctx, font, X(275.0f), Y(371.0f)" not in final:
 avatar_a = final.index("static void DrawSCBDFinalAvatar(")
 avatar_b = final.index("static void DrawSCBDFinalCountdown(", avatar_a)
 avatar_section = final[avatar_a:avatar_b]
-if "FillCircle" in avatar_section:
-    raise SystemExit("V0.5.8C HOTFIX2 safety failure: avatar still paints an extra circle")
+if "ctx->Draw()->FillCircle(" in avatar_section:
+    raise SystemExit("V0.5.8C HOTFIX3 safety failure: avatar renderer still paints an extra circle")
 
 print("PSP Live FloGB V0.5.8C patch applied successfully.")
