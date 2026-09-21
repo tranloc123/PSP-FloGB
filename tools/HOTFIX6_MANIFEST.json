@@ -1,0 +1,20 @@
+{
+  "version": "V0.5.8C HOTFIX6 / V0.5.8F",
+  "upload": "tools/apply_psp_live_flogb_v0_5_8c.py",
+  "workflow_change_required": false,
+  "fixes": {
+    "dev_kratos_pick_id": 14,
+    "remove_wrong_kratos_pick_id": 10,
+    "pick_success_duration_ms": 4500,
+    "stage_a_pick_flash_ms": 1350,
+    "stage_b": "Locked In"
+  },
+  "preserved": [
+    "exact 28 portraits",
+    "ranking mapping",
+    "Royal Unicode font",
+    "avatar centers",
+    "Top5",
+    "timeout ownership"
+  ]
+}
