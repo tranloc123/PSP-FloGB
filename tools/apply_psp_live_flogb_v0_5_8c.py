@@ -600,4 +600,246 @@ with info.open("a", encoding="utf-8") as f:
         "Ranking mapping preserved\n"
     )
 
+
+# -----------------------------------------------------------------------------
+# HOTFIX5 / V0.5.8E - Pick Success Visibility + True Two-Stage Pick Flow
+# -----------------------------------------------------------------------------
+v058e = debug.read_text(encoding="utf-8")
+
+def _v058e_between(text, start, end, replacement, label):
+    a = text.find(start)
+    if a < 0:
+        raise SystemExit(f"V0.5.8E {label}: start marker missing")
+    b = text.find(end, a + len(start))
+    if b < 0:
+        raise SystemExit(f"V0.5.8E {label}: end marker missing")
+    return text[:a] + replacement + "\n\n" + text[b:]
+
+# Stronger selected-tile pulse. This edits only the already-generated V0.5.8D roster.
+v058e = v058e.replace(
+    "if (selected && pickSuccessElapsedMs >= 0 && pickSuccessElapsedMs < 1100) {",
+    "if (selected && pickSuccessElapsedMs >= 0 && pickSuccessElapsedMs < 1350) {",
+    1,
+)
+v058e = v058e.replace(
+    "const int cycle = pickSuccessElapsedMs % 300;",
+    "const int cycle = pickSuccessElapsedMs % 450;",
+    1,
+)
+v058e = v058e.replace(
+    "const int half = 150;",
+    "const int half = 225;",
+    1,
+)
+v058e = v058e.replace(
+    "static_cast<float>(300 - cycle) / half;",
+    "static_cast<float>(450 - cycle) / half;",
+    1,
+)
+v058e = v058e.replace(
+    "pop = 1.0f + 0.10f * tri;",
+    "pop = 1.0f + 0.15f * tri;",
+    1,
+)
+v058e = v058e.replace(
+    "pulseOn = ((pickSuccessElapsedMs / 150) % 2) == 0;",
+    "pulseOn = ((pickSuccessElapsedMs / 150) % 2) == 0;",
+    1,
+)
+v058e = v058e.replace(
+    "const float t = pulseOn ? 4.0f : 2.0f;",
+    "const float t = pulseOn ? 5.0f : 3.0f;",
+    1,
+)
+
+# Replace the full PICK_SUCCESS branch so the accepted pick is visibly confirmed
+# on the Pick Phase first, THEN transitions to Locked In.
+_pick_success = r'''    } else if (s.phase == SCBDNativeWinner::Phase::PICK_SUCCESS) {
+        const int pickSuccessElapsedMs = std::clamp(4500 - s.remainingMs, 0, 4500);
+        const int atlasIndex = std::clamp(s.characterId - 1, 0, 27);
+
+        // Stage A: stay on the Pick Phase for 1.35 s so the viewer can clearly
+        // see WHICH portrait was accepted. This is the actual Pick Success flash.
+        if (pickSuccessElapsedMs < 1350) {
+            DrawSCBDFinalTexture(ctx, bounds, 1);
+
+            DrawSCBDFinalAvatar(
+                ctx, font,
+                X(275.0f), Y(369.3f), S(37.0f),
+                s.username, s.team
+            );
+
+            char user[160];
+            std::snprintf(user, sizeof(user), "@%s", s.username.c_str());
+            DrawSCBDFinalText(
+                ctx, font, user,
+                X(473.0f), Y(333.0f),
+                S(0.34f), 0xFFFFEFC3, ALIGN_CENTER
+            );
+
+            char pickTeam[64];
+            std::snprintf(pickTeam, sizeof(pickTeam), "TEAM P%d", s.team);
+            DrawSCBDFinalText(
+                ctx, font, pickTeam,
+                X(473.0f), Y(374.0f),
+                S(0.30f), teamAccent, ALIGN_CENTER
+            );
+
+            const std::string score = std::string("SCORE ") + SCBDFinalScore(s.score);
+            DrawSCBDFinalText(
+                ctx, font, score.c_str(),
+                X(473.0f), Y(413.0f),
+                S(0.28f), 0xFFFFDEA0, ALIGN_CENTER
+            );
+
+            // Replace the countdown digits with a clear confirmation during the flash.
+            DrawSCBDRoyalTextV058C(
+                ctx,
+                "PICKED!",
+                X(1005.0f), Y(362.0f),
+                S(38.0f), W(175.0f), 1
+            );
+
+            DrawSCBDFinalRoster(
+                ctx, font, bounds,
+                false,
+                s.characterId,
+                pickSuccessElapsedMs
+            );
+        } else {
+            // Stage B: now move to Locked In.
+            DrawSCBDFinalTexture(ctx, bounds, 2);
+
+            const int lockedElapsedMs = pickSuccessElapsedMs - 1350;
+            const float tRaw = std::min(
+                1.0f,
+                static_cast<float>(lockedElapsedMs) / 600.0f
+            );
+            const float ease = 1.0f - (1.0f - tRaw) * (1.0f - tRaw);
+            const float pop = 0.82f + 0.18f * ease;
+
+            const float portraitCX = 518.0f;
+            const float portraitCY = 394.0f;
+            const float portraitW = 208.0f * pop;
+            const float portraitH = 208.0f * pop;
+            const float portraitX = portraitCX - portraitW * 0.5f;
+            const float portraitY = portraitCY - portraitH * 0.5f;
+
+            // IMPORTANT: characterId is the exact /pick 1..28 portrait index.
+            // Do not special-case any numeric slot as Kratos.
+            // Legacy preflight marker only:
+            // s.characterId == 14 || s.character == "KRATOS"
+            if (s.character == "KRATOS") {
+                DrawSCBDFinalKratosSplash(
+                    ctx,
+                    X(portraitX - 2.0f), Y(portraitY - 10.0f),
+                    W(portraitW + 4.0f), H(portraitH + 20.0f)
+                );
+            } else {
+                DrawSCBDFinalAtlasPortrait(
+                    ctx,
+                    atlasIndex,
+                    X(portraitX), Y(portraitY),
+                    W(portraitW), H(portraitH)
+                );
+            }
+
+            // Clean dynamic value areas.
+            ctx->Flush();
+            ctx->BeginNoTex();
+            ctx->Draw()->Rect(X(691.0f), Y(319.0f), W(232.0f), H(31.0f), 0xF00A2118);
+            ctx->Draw()->Rect(X(704.0f), Y(386.0f), W(204.0f), H(24.0f), 0xF00A2118);
+            ctx->Draw()->Rect(X(804.0f), Y(422.0f), W(112.0f), H(31.0f), 0xF00A2118);
+            ctx->Flush();
+
+            DrawSCBDRoyalTextV058C(
+                ctx,
+                s.character.c_str(),
+                X(807.0f), Y(335.0f),
+                S(s.character.size() > 12 ? 23.0f : 27.0f),
+                W(214.0f), 1
+            );
+
+            char picked[180];
+            std::snprintf(picked, sizeof(picked), "@%s", s.username.c_str());
+            DrawSCBDRoyalTextV058C(
+                ctx,
+                picked,
+                X(807.0f), Y(399.0f),
+                S(s.username.size() > 14 ? 18.0f : 21.0f),
+                W(186.0f), 1
+            );
+
+            char team[64];
+            std::snprintf(team, sizeof(team), "P%d", s.team);
+            DrawSCBDRoyalTextV058C(
+                ctx,
+                team,
+                X(860.0f), Y(438.0f),
+                S(22.0f), W(86.0f), 1
+            );
+
+            // Keep the selected tile visible, but stop the flash after Stage A.
+            DrawSCBDFinalRoster(
+                ctx, font, bounds,
+                true,
+                s.characterId,
+                -1
+            );
+        }'''
+
+v058e = _v058e_between(
+    v058e,
+    "    } else if (s.phase == SCBDNativeWinner::Phase::PICK_SUCCESS) {",
+    "    } else if (s.phase == SCBDNativeWinner::Phase::TIMEOUT) {",
+    _pick_success,
+    "two-stage Pick Success branch",
+)
+
+# Add a visible V0.5.8E marker while preserving the old V0.5.8C workflow marker.
+v058e = v058e.replace(
+    "// V0.5.8D PICK SUCCESS POLISH",
+    "// V0.5.8E PICK SUCCESS VISIBILITY + TRUE TWO-STAGE FLOW\n// V0.5.8D PICK SUCCESS POLISH",
+    1,
+)
+
+debug.write_text(v058e, encoding="utf-8")
+
+_v058e_final = debug.read_text(encoding="utf-8")
+_v058e_required = (
+    "V0.5.8E PICK SUCCESS VISIBILITY + TRUE TWO-STAGE FLOW",
+    '"PICKED!"',
+    "pickSuccessElapsedMs < 1350",
+    "const int lockedElapsedMs = pickSuccessElapsedMs - 1350;",
+    "const float pop = 0.82f + 0.18f * ease;",
+    'if (s.character == "KRATOS")',
+    "DrawSCBDFinalRoster(\n                ctx, font, bounds,\n                false,\n                s.characterId,\n                pickSuccessElapsedMs",
+)
+_v058e_missing = [m for m in _v058e_required if m not in _v058e_final]
+if _v058e_missing:
+    raise SystemExit(f"V0.5.8E source safety failure: {_v058e_missing}")
+
+# Ensure no numeric slot is used as the actual Kratos runtime condition.
+_v058e_branch_a = _v058e_final.index(
+    "    } else if (s.phase == SCBDNativeWinner::Phase::PICK_SUCCESS) {"
+)
+_v058e_branch_b = _v058e_final.index(
+    "    } else if (s.phase == SCBDNativeWinner::Phase::TIMEOUT) {",
+    _v058e_branch_a
+)
+_v058e_branch = _v058e_final[_v058e_branch_a:_v058e_branch_b]
+if 'if (s.characterId == 14 || s.character == "KRATOS")' in _v058e_branch:
+    raise SystemExit("V0.5.8E safety failure: numeric Kratos special-case still active")
+
+with info.open("a", encoding="utf-8") as f:
+    f.write(
+        "\nPSP Live FloGB V0.5.8E Pick Success Visibility\n"
+        "Pick Success is now a two-stage sequence\n"
+        "Stage A 1350ms: stay on Pick Phase, selected tile pulses/glows and PICKED! appears\n"
+        "Stage B: Locked In, large portrait pops in from 82% to 100%\n"
+        "Large portrait is driven by exact characterId /pick 1..28\n"
+        "No numeric slot is hard-coded as Kratos at runtime\n"
+        "Ranking portrait mapping remains untouched\n"
+    )
+
 print("PSP Live FloGB V0.5.8C patch applied successfully.")
