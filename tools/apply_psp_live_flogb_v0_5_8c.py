@@ -185,4 +185,419 @@ avatar_section = final[avatar_a:avatar_b]
 if "ctx->Draw()->FillCircle(" in avatar_section:
     raise SystemExit("V0.5.8C HOTFIX3 safety failure: avatar renderer still paints an extra circle")
 
+
+# -----------------------------------------------------------------------------
+# HOTFIX4 / V0.5.8D POLISH LAYER
+# -----------------------------------------------------------------------------
+v058d = debug.read_text(encoding="utf-8")
+
+def _v058d_between(text, start, end, replacement, label):
+    a = text.find(start)
+    if a < 0:
+        raise SystemExit(f"V0.5.8D {label}: start marker missing")
+    b = text.find(end, a + len(start))
+    if b < 0:
+        raise SystemExit(f"V0.5.8D {label}: end marker missing")
+    return text[:a] + replacement + "\n\n" + text[b:]
+
+def _v058d_once(text, old, new, label):
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"V0.5.8D {label}: expected 1 occurrence, found {count}")
+    return text.replace(old, new, 1)
+
+_v058d_glyph_index = r'''static int SCBDRoyalGlyphIndexV058C(uint32_t cp) {
+    if (cp >= 0x0300u && cp <= 0x036Fu)
+        return -1;
+
+    for (int i = 0; i < kSCBDRoyalGlyphCountV058C; ++i) {
+        if (kSCBDRoyalCodepointsV058C[i] == cp)
+            return i;
+    }
+    for (int i = 0; i < kSCBDRoyalGlyphCountV058C; ++i) {
+        if (kSCBDRoyalCodepointsV058C[i] == 0x25C7u)
+            return i;
+    }
+    for (int i = 0; i < kSCBDRoyalGlyphCountV058C; ++i) {
+        if (kSCBDRoyalCodepointsV058C[i] == static_cast<uint32_t>('?'))
+            return i;
+    }
+    return 0;
+}'''
+
+v058d = _v058d_between(
+    v058d,
+    "static int SCBDRoyalGlyphIndexV058C(uint32_t cp) {",
+    "static float SCBDRoyalMeasureV058C(",
+    _v058d_glyph_index,
+    "glyph fallback",
+)
+
+_v058d_measure = r'''static float SCBDRoyalMeasureV058C(const char *text) {
+    if (!text)
+        return 0.0f;
+
+    constexpr float kTracking = 1.35f;
+    float w = 0.0f;
+    int visible = 0;
+    const char *p = text;
+    while (*p) {
+        uint32_t cp = 0;
+        p = SCBDDecodeUTF8V058C(p, cp);
+        const int idx = SCBDRoyalGlyphIndexV058C(cp);
+        if (idx < 0)
+            continue;
+        if (visible > 0)
+            w += kTracking;
+        w += static_cast<float>(kSCBDRoyalAdvanceV058C[idx]);
+        ++visible;
+    }
+    return w;
+}'''
+
+v058d = _v058d_between(
+    v058d,
+    "static float SCBDRoyalMeasureV058C(",
+    "static void DrawSCBDRoyalTextV058C(",
+    _v058d_measure,
+    "Royal text measurement",
+)
+
+_v058d_royal_text = r'''static void DrawSCBDRoyalTextV058C(
+    UIContext *ctx,
+    const char *text,
+    float x,
+    float y,
+    float targetH,
+    float maxW,
+    int align
+) {
+    Draw::Texture *atlas = GetSCBDRoyalUnicodeAtlasV058C(ctx);
+    if (!atlas || !text || !*text)
+        return;
+
+    constexpr float kTracking = 1.35f;
+    const float naturalW = SCBDRoyalMeasureV058C(text);
+    float scale = targetH / static_cast<float>(kSCBDRoyalCellHV058C);
+    float totalW = naturalW * scale;
+    if (maxW > 1.0f && totalW > maxW) {
+        scale *= maxW / totalW;
+        totalW = maxW;
+    }
+
+    float penX = x;
+    if (align == 1)
+        penX -= totalW * 0.5f;
+    else if (align == 2)
+        penX -= totalW;
+
+    const float drawW = static_cast<float>(kSCBDRoyalCellWV058C) * scale;
+    const float drawH = static_cast<float>(kSCBDRoyalCellHV058C) * scale;
+    const float topY = y - drawH * 0.5f;
+
+    ctx->Flush();
+    ctx->Begin();
+    ctx->GetDrawContext()->BindTexture(0, atlas);
+
+    const char *p = text;
+    bool firstVisible = true;
+    while (*p) {
+        uint32_t cp = 0;
+        p = SCBDDecodeUTF8V058C(p, cp);
+        const int idx = SCBDRoyalGlyphIndexV058C(cp);
+        if (idx < 0)
+            continue;
+
+        if (!firstVisible)
+            penX += kTracking * scale;
+        firstVisible = false;
+
+        const int col = idx % kSCBDRoyalColsV058C;
+        const int row = idx / kSCBDRoyalColsV058C;
+        const float inset = 0.75f;
+        const float u1 = static_cast<float>(col * kSCBDRoyalCellWV058C + inset) / static_cast<float>(kSCBDRoyalAtlasWV058C);
+        const float v1 = static_cast<float>(row * kSCBDRoyalCellHV058C + inset) / static_cast<float>(kSCBDRoyalAtlasHV058C);
+        const float u2 = static_cast<float>((col + 1) * kSCBDRoyalCellWV058C - inset) / static_cast<float>(kSCBDRoyalAtlasWV058C);
+        const float v2 = static_cast<float>((row + 1) * kSCBDRoyalCellHV058C - inset) / static_cast<float>(kSCBDRoyalAtlasHV058C);
+
+        const float advancePx = static_cast<float>(kSCBDRoyalAdvanceV058C[idx]) * scale;
+        const float cellPad = (static_cast<float>(kSCBDRoyalCellWV058C) * scale - advancePx) * 0.5f;
+        const float glyphX = penX - cellPad;
+
+        ctx->Draw()->DrawTexRect(
+            glyphX, topY,
+            glyphX + drawW, topY + drawH,
+            u1, v1, u2, v2,
+            0xFFFFFFFF
+        );
+        penX += advancePx;
+    }
+
+    ctx->Flush();
+    ctx->RebindTexture();
+    ctx->BindFontTexture();
+}'''
+
+v058d = _v058d_between(
+    v058d,
+    "static void DrawSCBDRoyalTextV058C(",
+    "static int SCBDTimerGlyphIndexV058C(",
+    _v058d_royal_text,
+    "Royal text renderer",
+)
+
+_v058d_timer = r'''static void DrawSCBDTimerV058C(
+    UIContext *ctx,
+    float cx,
+    float cy,
+    int remainingMs,
+    float maxW
+) {
+    Draw::Texture *atlas = GetSCBDTimerAtlasV058C(ctx);
+    if (!atlas)
+        return;
+
+    const int tenths = std::max(0, remainingMs / 100);
+    char timer[32];
+    std::snprintf(timer, sizeof(timer), "%d.%ds", tenths / 10, tenths % 10);
+
+    const int pulsePeriod = remainingMs <= 3000 ? 320 : remainingMs <= 5000 ? 520 : 900;
+    const int phase = pulsePeriod > 0 ? (remainingMs % pulsePeriod) : 0;
+    const int half = std::max(1, pulsePeriod / 2);
+    const float tri = phase <= half ? static_cast<float>(phase) / half :
+        static_cast<float>(pulsePeriod - phase) / half;
+    const float pulseAmp = remainingMs <= 3000 ? 0.11f : remainingMs <= 5000 ? 0.065f : 0.025f;
+    const float targetH = 76.0f * (1.0f + pulseAmp * tri);
+
+    float naturalW = 0.0f;
+    for (const char *p = timer; *p; ++p)
+        naturalW += static_cast<float>(kSCBDTimerAdvanceV058C[SCBDTimerGlyphIndexV058C(*p)]);
+
+    float scale = targetH / 148.0f;
+    float totalW = naturalW * scale;
+    if (maxW > 1.0f && totalW > maxW) {
+        scale *= maxW / totalW;
+        totalW = maxW;
+    }
+
+    float penX = cx - totalW * 0.5f;
+    const float drawW = 120.0f * scale;
+    const float drawH = 148.0f * scale;
+    const float topY = cy - drawH * 0.5f;
+
+    ctx->Flush();
+    ctx->Begin();
+    ctx->GetDrawContext()->BindTexture(0, atlas);
+    for (const char *p = timer; *p; ++p) {
+        const int idx = SCBDTimerGlyphIndexV058C(*p);
+        const float inset = 0.75f;
+        const float u1 = (static_cast<float>(idx * 120) + inset) / 1440.0f;
+        const float u2 = (static_cast<float>((idx + 1) * 120) - inset) / 1440.0f;
+        ctx->Draw()->DrawTexRect(
+            penX, topY,
+            penX + drawW, topY + drawH,
+            u1, inset / 148.0f, u2, (148.0f - inset) / 148.0f,
+            0xFFFFFFFF
+        );
+        penX += static_cast<float>(kSCBDTimerAdvanceV058C[idx]) * scale;
+    }
+
+    ctx->Flush();
+    ctx->RebindTexture();
+    ctx->BindFontTexture();
+}'''
+
+v058d = _v058d_between(
+    v058d,
+    "static void DrawSCBDTimerV058C(",
+    "static std::string SCBDFormatNumberV058C(",
+    _v058d_timer,
+    "timer renderer",
+)
+
+_v058d_roster = r'''static void DrawSCBDFinalRoster(
+    UIContext *ctx,
+    FontID font,
+    const Bounds &bounds,
+    bool locked,
+    int selectedId,
+    int pickSuccessElapsedMs
+) {
+    const float sx = bounds.w / 1280.0f;
+    const float sy = bounds.h / 720.0f;
+    auto X = [&](float v) { return bounds.x + v * sx; };
+    auto Y = [&](float v) { return bounds.y + v * sy; };
+    auto W = [&](float v) { return v * sx; };
+    auto H = [&](float v) { return v * sy; };
+
+    const float startX = locked ? 343.0f : 246.0f;
+    const float startY1 = locked ? 487.0f : 478.0f;
+    const float startY2 = locked ? 529.0f : 533.0f;
+    const float stepX = locked ? 45.5f : 56.0f;
+    const float tileW = locked ? 34.0f : 43.0f;
+    const float tileH = locked ? 31.0f : 38.0f;
+
+    for (int i = 0; i < 28; ++i) {
+        const int col = i % 14;
+        const int row = i / 14;
+        const float baseX = startX + col * stepX;
+        const float baseY = row == 0 ? startY1 : startY2;
+        const bool selected = selectedId == i + 1;
+
+        float pop = 1.0f;
+        bool pulseOn = false;
+        if (selected && pickSuccessElapsedMs >= 0 && pickSuccessElapsedMs < 1100) {
+            const int cycle = pickSuccessElapsedMs % 300;
+            const int half = 150;
+            const float tri = cycle <= half ? static_cast<float>(cycle) / half :
+                static_cast<float>(300 - cycle) / half;
+            pop = 1.0f + 0.10f * tri;
+            pulseOn = ((pickSuccessElapsedMs / 150) % 2) == 0;
+        }
+
+        const float drawW = tileW * pop;
+        const float drawH = tileH * pop;
+        const float px = baseX - (drawW - tileW) * 0.5f;
+        const float py = baseY - (drawH - tileH) * 0.5f;
+
+        DrawSCBDFinalAtlasPortrait(ctx, i, X(px), Y(py), W(drawW), H(drawH));
+
+        ctx->Flush();
+        ctx->BeginNoTex();
+        ctx->Draw()->Rect(X(px), Y(py + drawH - 10.0f), W(drawW), H(10.0f), 0xD0181008);
+
+        if (selected) {
+            const float t = pulseOn ? 4.0f : 2.0f;
+            const uint32_t c = pulseOn ? 0xFFFFD85Au : 0xFF29E69Au;
+            ctx->Draw()->Rect(X(px - t), Y(py - t), W(drawW + t * 2.0f), H(t), c);
+            ctx->Draw()->Rect(X(px - t), Y(py + drawH), W(drawW + t * 2.0f), H(t), c);
+            ctx->Draw()->Rect(X(px - t), Y(py), W(t), H(drawH), c);
+            ctx->Draw()->Rect(X(px + drawW), Y(py), W(t), H(drawH), c);
+        }
+        ctx->Flush();
+
+        char slotNumber[8];
+        std::snprintf(slotNumber, sizeof(slotNumber), "%d", i + 1);
+        DrawSCBDFinalText(
+            ctx, font, slotNumber,
+            X(baseX + tileW * 0.5f), Y(baseY + tileH - 5.0f),
+            (0.18f * std::min(sx, sy)), 0xFFFFE7A8, ALIGN_CENTER
+        );
+    }
+}'''
+
+v058d = _v058d_between(
+    v058d,
+    "static void DrawSCBDFinalRoster(",
+    "static void DrawSCBDFinalAvatar(",
+    _v058d_roster,
+    "pick-success roster",
+)
+
+v058d = _v058d_once(
+    v058d,
+    "DrawSCBDFinalAvatar(ctx, font, X(544.0f), Y(451.0f), S(36.0f), s.username, s.team);",
+    "DrawSCBDFinalAvatar(ctx, font, X(542.5f), Y(456.5f), S(35.0f), s.username, s.team);",
+    "Victory avatar center",
+)
+v058d = _v058d_once(
+    v058d,
+    "DrawSCBDFinalAvatar(ctx, font, X(275.0f), Y(371.0f), S(38.0f), s.username, s.team);",
+    "DrawSCBDFinalAvatar(ctx, font, X(275.0f), Y(369.3f), S(37.0f), s.username, s.team);",
+    "Pick avatar center",
+)
+
+v058d = _v058d_once(
+    v058d,
+    "DrawSCBDFinalRoster(ctx, font, bounds, false, 0);",
+    "DrawSCBDFinalRoster(ctx, font, bounds, false, 0, -1);",
+    "Pick roster call",
+)
+
+_v058d_large = r'''        const int atlasIndex = std::clamp(s.characterId - 1, 0, 27);
+        const int pickSuccessElapsedMs = std::clamp(4500 - s.remainingMs, 0, 4500);
+
+        const float tRaw = std::min(1.0f, static_cast<float>(pickSuccessElapsedMs) / 700.0f);
+        const float ease = tRaw * (2.0f - tRaw);
+        float pop = 0.88f + 0.12f * ease;
+
+        if (pickSuccessElapsedMs < 1100) {
+            const int cycle = pickSuccessElapsedMs % 300;
+            const int half = 150;
+            const float tri = cycle <= half ? static_cast<float>(cycle) / half :
+                static_cast<float>(300 - cycle) / half;
+            pop *= 1.0f + 0.035f * tri;
+        }
+
+        const float portraitCX = 518.0f;
+        const float portraitCY = 394.0f;
+        const float portraitW = 208.0f * pop;
+        const float portraitH = 208.0f * pop;
+        const float portraitX = portraitCX - portraitW * 0.5f;
+        const float portraitY = portraitCY - portraitH * 0.5f;
+
+        if (s.characterId == 14 || s.character == "KRATOS") {
+            DrawSCBDFinalKratosSplash(
+                ctx,
+                X(portraitX - 2.0f), Y(portraitY - 10.0f),
+                W(portraitW + 4.0f), H(portraitH + 20.0f)
+            );
+        } else {
+            DrawSCBDFinalAtlasPortrait(
+                ctx,
+                atlasIndex,
+                X(portraitX), Y(portraitY),
+                W(portraitW), H(portraitH)
+            );
+        }
+'''
+
+v058d = _v058d_between(
+    v058d,
+    "        const int atlasIndex = std::clamp(s.characterId - 1, 0, 27);",
+    "        // HOTFIX2 Locked In clean dynamic fields.",
+    _v058d_large,
+    "dynamic Locked-In portrait",
+)
+
+v058d = _v058d_once(
+    v058d,
+    "DrawSCBDFinalRoster(ctx, font, bounds, true, s.characterId);",
+    "DrawSCBDFinalRoster(ctx, font, bounds, true, s.characterId, pickSuccessElapsedMs);",
+    "Locked roster call",
+)
+
+v058d = v058d.replace(
+    "// WINNER FINAL V0.5.8C |",
+    "// V0.5.8D PICK SUCCESS POLISH\n// WINNER FINAL V0.5.8C |",
+    1,
+)
+
+debug.write_text(v058d, encoding="utf-8")
+
+_v058d_final = debug.read_text(encoding="utf-8")
+_v058d_required = (
+    "V0.5.8D PICK SUCCESS POLISH",
+    "cp >= 0x0300u && cp <= 0x036Fu",
+    "const float inset = 0.75f;",
+    "pickSuccessElapsedMs",
+    "portraitCX = 518.0f",
+    "DrawSCBDFinalAvatar(ctx, font, X(542.5f), Y(456.5f)",
+    "DrawSCBDFinalAvatar(ctx, font, X(275.0f), Y(369.3f)",
+)
+_v058d_missing = [m for m in _v058d_required if m not in _v058d_final]
+if _v058d_missing:
+    raise SystemExit(f"V0.5.8D source safety failure: {_v058d_missing}")
+
+with info.open("a", encoding="utf-8") as f:
+    f.write(
+        "\nPSP Live FloGB V0.5.8D Pick Success Polish\n"
+        "Exact avatar center correction\n"
+        "Royal glyph UV bleed/spacing correction\n"
+        "Unicode combining-mark fallback\n"
+        "Selected small portrait pulse/glow\n"
+        "Dynamic large portrait from /pick characterId with pop animation\n"
+        "Ranking mapping preserved\n"
+    )
+
 print("PSP Live FloGB V0.5.8C patch applied successfully.")
