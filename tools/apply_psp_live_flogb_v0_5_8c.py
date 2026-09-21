@@ -929,4 +929,381 @@ with info.open("a", encoding="utf-8") as f:
         "No ranking or exact 28 portrait asset changes\n"
     )
 
+
+# -----------------------------------------------------------------------------
+# V0.5.9A NATIVE LIVE BRIDGE TRANSPORT CORE
+# -----------------------------------------------------------------------------
+scbd_dir_v059 = repo / "SCBD"
+scbd_dir_v059.mkdir(exist_ok=True)
+
+live_bridge_h = r'''#pragma once
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include "SCBD/SCBDNativeWinner.h"
+
+namespace SCBDNativeLiveBridge {
+
+inline constexpr int kPort = 8796;
+inline constexpr int kMaxPacketsPerFrame = 16;
+inline constexpr int kMaxPacketBytes = 2048;
+
+struct RuntimeState {
+    int fd = -1;
+    bool bound = false;
+    uint64_t packets = 0;
+    uint64_t errors = 0;
+    std::string lastCommand = "NONE";
+    std::string lastError;
+    std::string lastAvatarUrl;
+    std::chrono::steady_clock::time_point nextBindAttempt{};
+};
+
+struct Snapshot {
+    bool bound = false;
+    int port = kPort;
+    uint64_t packets = 0;
+    uint64_t errors = 0;
+    std::string lastCommand;
+    std::string lastError;
+    std::string lastAvatarUrl;
+};
+
+inline RuntimeState &State() {
+    static RuntimeState s;
+    return s;
+}
+
+inline int HexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+inline std::string UrlDecode(const std::string &src) {
+    std::string out;
+    out.reserve(src.size());
+    for (size_t i = 0; i < src.size(); ++i) {
+        const char c = src[i];
+        if (c == '%' && i + 2 < src.size()) {
+            const int hi = HexNibble(src[i + 1]);
+            const int lo = HexNibble(src[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        if (c == '+')
+            out.push_back(' ');
+        else
+            out.push_back(c);
+    }
+    return out;
+}
+
+inline std::vector<std::string> SplitTabs(const std::string &line) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= line.size()) {
+        const size_t tab = line.find('\t', start);
+        if (tab == std::string::npos) {
+            out.push_back(line.substr(start));
+            break;
+        }
+        out.push_back(line.substr(start, tab - start));
+        start = tab + 1;
+    }
+    return out;
+}
+
+inline int ParseInt(const std::string &text, int fallback) {
+    if (text.empty())
+        return fallback;
+    char *end = nullptr;
+    errno = 0;
+    const long v = std::strtol(text.c_str(), &end, 10);
+    if (errno != 0 || end == text.c_str() || *end != '\0')
+        return fallback;
+    if (v < -2147483647L) return -2147483647;
+    if (v > 2147483647L) return 2147483647;
+    return static_cast<int>(v);
+}
+
+inline bool EnsureBound(RuntimeState &s) {
+    if (s.bound && s.fd >= 0)
+        return true;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now < s.nextBindAttempt)
+        return false;
+    s.nextBindAttempt = now + std::chrono::seconds(2);
+
+    const int fd = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+        ++s.errors;
+        s.lastError = "socket() failed";
+        return false;
+    }
+
+    int reuse = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(kPort);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+        ++s.errors;
+        s.lastError = std::string("bind 127.0.0.1:8796 failed errno=") + std::to_string(errno);
+        ::close(fd);
+        return false;
+    }
+
+    s.fd = fd;
+    s.bound = true;
+    s.lastError.clear();
+    return true;
+}
+
+inline void Reply(
+    RuntimeState &s,
+    const sockaddr_in &peer,
+    socklen_t peerLen,
+    const std::string &command,
+    bool ok,
+    const std::string &detail = std::string()
+) {
+    if (s.fd < 0)
+        return;
+
+    std::string reply = "ACK\t" + command + "\t" + (ok ? "OK" : "ERR");
+    if (!detail.empty())
+        reply += "\t" + detail;
+
+    ::sendto(
+        s.fd,
+        reply.data(),
+        reply.size(),
+        0,
+        reinterpret_cast<const sockaddr *>(&peer),
+        peerLen
+    );
+}
+
+inline void HandlePacket(
+    RuntimeState &s,
+    std::string line,
+    const sockaddr_in &peer,
+    socklen_t peerLen
+) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == '\0'))
+        line.pop_back();
+
+    const std::vector<std::string> parts = SplitTabs(line);
+    if (parts.empty() || parts[0].empty()) {
+        ++s.errors;
+        s.lastError = "empty command";
+        Reply(s, peer, peerLen, "UNKNOWN", false, "empty-command");
+        return;
+    }
+
+    const std::string &cmd = parts[0];
+    s.lastCommand = cmd;
+
+    if (cmd == "PING") {
+        Reply(s, peer, peerLen, "PING", true, "V0.5.9A");
+        return;
+    }
+
+    if (cmd == "WINNER") {
+        if (parts.size() < 4) {
+            ++s.errors;
+            s.lastError = "WINNER needs username/team/score";
+            Reply(s, peer, peerLen, "WINNER", false, "bad-fields");
+            return;
+        }
+
+        const std::string username = UrlDecode(parts[1]);
+        const int team = ParseInt(parts[2], 1) == 2 ? 2 : 1;
+        const int score = std::max(0, ParseInt(parts[3], 0));
+        if (parts.size() >= 5)
+            s.lastAvatarUrl = UrlDecode(parts[4]);
+
+        SCBDNativeWinner::BeginWinnerPick(username.c_str(), team, score);
+        Reply(s, peer, peerLen, "WINNER", true);
+        return;
+    }
+
+    if (cmd == "PICK") {
+        if (parts.size() < 3) {
+            ++s.errors;
+            s.lastError = "PICK needs id/name";
+            Reply(s, peer, peerLen, "PICK", false, "bad-fields");
+            return;
+        }
+
+        const int id = ParseInt(parts[1], 0);
+        const std::string character = UrlDecode(parts[2]);
+        if (id < 1 || id > 28 || character.empty()) {
+            ++s.errors;
+            s.lastError = "PICK rejected: id must be 1..28 and name must be non-empty";
+            Reply(s, peer, peerLen, "PICK", false, "invalid-pick");
+            return;
+        }
+
+        // characterId and character arrive in ONE validated packet.
+        // Native does not independently remap names.
+        SCBDNativeWinner::ShowPickSuccess(id, character.c_str());
+        Reply(s, peer, peerLen, "PICK", true);
+        return;
+    }
+
+    if (cmd == "TIMEOUT") {
+        SCBDNativeWinner::ShowTimeout();
+        Reply(s, peer, peerLen, "TIMEOUT", true);
+        return;
+    }
+
+    if (cmd == "CANCEL") {
+        SCBDNativeWinner::Cancel();
+        Reply(s, peer, peerLen, "CANCEL", true);
+        return;
+    }
+
+    ++s.errors;
+    s.lastError = std::string("unknown command: ") + cmd;
+    Reply(s, peer, peerLen, cmd, false, "unknown-command");
+}
+
+inline void Process() {
+    RuntimeState &s = State();
+    if (!EnsureBound(s))
+        return;
+
+    for (int i = 0; i < kMaxPacketsPerFrame; ++i) {
+        char buf[kMaxPacketBytes + 1]{};
+        sockaddr_in peer{};
+        socklen_t peerLen = sizeof(peer);
+
+        const ssize_t n = ::recvfrom(
+            s.fd,
+            buf,
+            kMaxPacketBytes,
+            MSG_DONTWAIT,
+            reinterpret_cast<sockaddr *>(&peer),
+            &peerLen
+        );
+
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                break;
+
+            ++s.errors;
+            s.lastError = std::string("recvfrom failed errno=") + std::to_string(errno);
+            break;
+        }
+
+        if (n == 0)
+            break;
+
+        buf[n] = '\0';
+        ++s.packets;
+        HandlePacket(s, std::string(buf, static_cast<size_t>(n)), peer, peerLen);
+    }
+}
+
+inline Snapshot Read() {
+    const RuntimeState &s = State();
+    Snapshot out;
+    out.bound = s.bound;
+    out.port = kPort;
+    out.packets = s.packets;
+    out.errors = s.errors;
+    out.lastCommand = s.lastCommand;
+    out.lastError = s.lastError;
+    out.lastAvatarUrl = s.lastAvatarUrl;
+    return out;
+}
+
+}  // namespace SCBDNativeLiveBridge
+'''
+
+(scbd_dir_v059 / "SCBDNativeLiveBridge.h").write_text(live_bridge_h, encoding="utf-8")
+
+debug_v059 = debug.read_text(encoding="utf-8")
+include_anchor = '#include "SCBD/SCBDNativeWinner.h"\n'
+bridge_include = '#include "SCBD/SCBDNativeLiveBridge.h"\n'
+if bridge_include not in debug_v059:
+    if include_anchor not in debug_v059:
+        raise SystemExit("V0.5.9A include anchor missing")
+    debug_v059 = debug_v059.replace(include_anchor, include_anchor + bridge_include, 1)
+
+process_anchor = "    SCBDNativeWinner::Process();\n"
+bridge_process = "    SCBDNativeLiveBridge::Process();\n"
+if bridge_process not in debug_v059:
+    if process_anchor not in debug_v059:
+        raise SystemExit("V0.5.9A process anchor missing")
+    debug_v059 = debug_v059.replace(process_anchor, bridge_process + process_anchor, 1)
+
+if "// V0.5.9A NATIVE LIVE BRIDGE" not in debug_v059:
+    debug_v059 = debug_v059.replace(
+        bridge_include,
+        bridge_include + "// V0.5.9A NATIVE LIVE BRIDGE | UDP 127.0.0.1:8796\n",
+        1
+    )
+
+debug.write_text(debug_v059, encoding="utf-8")
+
+bridge_check_v059 = (scbd_dir_v059 / "SCBDNativeLiveBridge.h").read_text(encoding="utf-8")
+debug_check_v059 = debug.read_text(encoding="utf-8")
+
+required_bridge_v059 = (
+    "inline constexpr int kPort = 8796;",
+    "htonl(INADDR_LOOPBACK)",
+    'if (cmd == "WINNER")',
+    'if (cmd == "PICK")',
+    'if (cmd == "TIMEOUT")',
+    'if (cmd == "CANCEL")',
+    'if (cmd == "PING")',
+    "SCBDNativeWinner::BeginWinnerPick",
+    "SCBDNativeWinner::ShowPickSuccess",
+    "characterId and character arrive in ONE validated packet",
+)
+missing_bridge_v059 = [m for m in required_bridge_v059 if m not in bridge_check_v059]
+if missing_bridge_v059:
+    raise SystemExit(f"V0.5.9A bridge safety missing: {missing_bridge_v059}")
+
+required_debug_v059 = (
+    '#include "SCBD/SCBDNativeLiveBridge.h"',
+    "SCBDNativeLiveBridge::Process();",
+    "V0.5.9A NATIVE LIVE BRIDGE",
+)
+missing_debug_v059 = [m for m in required_debug_v059 if m not in debug_check_v059]
+if missing_debug_v059:
+    raise SystemExit(f"V0.5.9A DebugOverlay safety missing: {missing_debug_v059}")
+
+with info.open("a", encoding="utf-8") as f:
+    f.write(
+        "\nPSP Live FloGB V0.5.9A Native Live Bridge Transport Core\n"
+        "UDP receiver: 127.0.0.1:8796\n"
+        "Commands: PING / WINNER / PICK / TIMEOUT / CANCEL\n"
+        "PICK carries characterId + character in one validated packet\n"
+        "Native returns ACK for end-to-end health checks\n"
+    )
+
 print("PSP Live FloGB V0.5.8C patch applied successfully.")
