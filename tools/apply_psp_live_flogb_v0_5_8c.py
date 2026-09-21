@@ -842,4 +842,91 @@ with info.open("a", encoding="utf-8") as f:
         "Ranking portrait mapping remains untouched\n"
     )
 
+
+# -----------------------------------------------------------------------------
+# HOTFIX6 / V0.5.8F - Fix DEV Kratos mapping + real Pick Success timing
+# -----------------------------------------------------------------------------
+winner_path_v058f = repo / "SCBD/SCBDNativeWinner.h"
+emu_path_v058f = repo / "UI/EmuScreen.cpp"
+
+if not winner_path_v058f.is_file():
+    raise SystemExit("V0.5.8F missing SCBDNativeWinner.h")
+if not emu_path_v058f.is_file():
+    raise SystemExit("V0.5.8F missing EmuScreen.cpp")
+
+winner_v058f = winner_path_v058f.read_text(encoding="utf-8")
+emu_v058f = emu_path_v058f.read_text(encoding="utf-8")
+debug_v058f = debug.read_text(encoding="utf-8")
+
+# The V0.5.8E renderer measures Pick Success from a 4500 ms window.
+# V0.5.7A still left the native state machine at 3200 ms, which made
+# Stage A begin around 1300 ms elapsed and effectively disappear.
+old_pick_ms = "inline constexpr int kPickSuccessMs = 3200;"
+new_pick_ms = "inline constexpr int kPickSuccessMs = 4500;"
+if winner_v058f.count(old_pick_ms) != 1:
+    raise SystemExit(
+        f"V0.5.8F expected one old pick-success timing marker, found "
+        f"{winner_v058f.count(old_pick_ms)}"
+    )
+winner_v058f = winner_v058f.replace(old_pick_ms, new_pick_ms, 1)
+
+# V0.5.7A introduced the regression TEST LOCKED IN - 10 KRATOS.
+# The approved auto-pick grid has KRATOS at /pick 14.
+old_kratos_call = 'SCBDNativeWinner::ShowPickSuccess(10, "KRATOS");'
+new_kratos_call = 'SCBDNativeWinner::ShowPickSuccess(14, "KRATOS");'
+if emu_v058f.count(old_kratos_call) != 1:
+    raise SystemExit(
+        f"V0.5.8F expected one wrong 10/KRATOS DEV call, found "
+        f"{emu_v058f.count(old_kratos_call)}"
+    )
+emu_v058f = emu_v058f.replace(old_kratos_call, new_kratos_call, 1)
+
+old_kratos_label = '"TEST LOCKED IN - 10 KRATOS"'
+new_kratos_label = '"TEST /PICK 14 - KRATOS"'
+if debug_v058f.count(old_kratos_label) != 1:
+    raise SystemExit(
+        f"V0.5.8F expected one wrong 10/KRATOS DEV label, found "
+        f"{debug_v058f.count(old_kratos_label)}"
+    )
+debug_v058f = debug_v058f.replace(old_kratos_label, new_kratos_label, 1)
+
+# Add a visible note in Winner Lab so the next video is unambiguous.
+old_lab_title = '"WINNER VISUAL V2 LAB | Web Winner V5 van la fallback LIVE"'
+new_lab_title = '"WINNER V0.5.8F LAB | /PICK 14 = KRATOS | TWO-STAGE TEST"'
+if debug_v058f.count(old_lab_title) == 1:
+    debug_v058f = debug_v058f.replace(old_lab_title, new_lab_title, 1)
+
+winner_path_v058f.write_text(winner_v058f, encoding="utf-8")
+emu_path_v058f.write_text(emu_v058f, encoding="utf-8")
+debug.write_text(debug_v058f, encoding="utf-8")
+
+# Structural safety checks. Fail before Gradle if this regression comes back.
+winner_check_v058f = winner_path_v058f.read_text(encoding="utf-8")
+emu_check_v058f = emu_path_v058f.read_text(encoding="utf-8")
+debug_check_v058f = debug.read_text(encoding="utf-8")
+
+if "inline constexpr int kPickSuccessMs = 4500;" not in winner_check_v058f:
+    raise SystemExit("V0.5.8F safety: 4500 ms Pick Success timing missing")
+if 'SCBDNativeWinner::ShowPickSuccess(14, "KRATOS");' not in emu_check_v058f:
+    raise SystemExit("V0.5.8F safety: /pick 14 KRATOS DEV call missing")
+if 'SCBDNativeWinner::ShowPickSuccess(10, "KRATOS");' in emu_check_v058f:
+    raise SystemExit("V0.5.8F safety: old /pick 10 KRATOS regression still present")
+if '"TEST /PICK 14 - KRATOS"' not in debug_check_v058f:
+    raise SystemExit("V0.5.8F safety: corrected Winner Lab label missing")
+if "pickSuccessElapsedMs < 1350" not in debug_check_v058f:
+    raise SystemExit("V0.5.8F safety: V0.5.8E two-stage flash missing")
+if "const int pickSuccessElapsedMs = std::clamp(4500 - s.remainingMs, 0, 4500);" not in debug_check_v058f:
+    raise SystemExit("V0.5.8F safety: 4500 ms renderer timing marker missing")
+
+with info.open("a", encoding="utf-8") as f:
+    f.write(
+        "\nPSP Live FloGB V0.5.8F DEV Mapping + Timing Fix\n"
+        "Fix regression: DEV no longer sends 10/KRATOS\n"
+        "Approved auto-pick test: /pick 14 = KRATOS\n"
+        "Pick Success native duration: 4500 ms\n"
+        "Stage A: Pick Phase flash 1350 ms\n"
+        "Stage B: Locked In for the remaining window\n"
+        "No ranking or exact 28 portrait asset changes\n"
+    )
+
 print("PSP Live FloGB V0.5.8C patch applied successfully.")
