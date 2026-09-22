@@ -24510,4 +24510,128 @@ with info.open("a", encoding="utf-8") as f:
         "No changes to /pick mapping, ranking, or bridge transport\n"
     )
 
+
+# -----------------------------------------------------------------------------
+# V0.5.9E HOTFIX8 - FRAMED PORTRAIT HARD CLIP + FULL 28 SMART COVER
+# -----------------------------------------------------------------------------
+debug_v059e = debug.read_text(encoding="utf-8")
+
+start_v059e = debug_v059e.find("static void DrawSCBDFinalHeroPortraitV059C(")
+end_v059e = debug_v059e.find("static void DrawSCBDFinalKratosSplash(", start_v059e)
+if start_v059e < 0 or end_v059e < 0:
+    raise SystemExit("V0.5.9E: hero renderer anchors not found")
+
+new_renderer_v059e = r'''static void DrawSCBDFinalHeroPortraitV059C(
+    UIContext *ctx,
+    int index,
+    float x,
+    float y,
+    float w,
+    float h
+) {
+    Draw::Texture *atlas = GetSCBDWinnerHeroAtlasV059C(ctx);
+    if (!atlas)
+        return;
+
+    constexpr int kCols = 7;
+    constexpr float kAtlasW = 1792.0f;
+    constexpr float kAtlasH = 1024.0f;
+    constexpr float kInsetPx = 1.25f;
+
+    const int safeIndex = std::clamp(index, 0, 27);
+    const int col = safeIndex % kCols;
+    const int row = safeIndex / kCols;
+    const auto &profile = GetSCBDFinalHeroProfileV059D(safeIndex);
+
+    const float u1 = (static_cast<float>(col) * 256.0f + kInsetPx) / kAtlasW;
+    const float v1 = (static_cast<float>(row) * 256.0f + kInsetPx) / kAtlasH;
+    const float u2 = (static_cast<float>(col + 1) * 256.0f - kInsetPx) / kAtlasW;
+    const float v2 = (static_cast<float>(row + 1) * 256.0f - kInsetPx) / kAtlasH;
+
+    constexpr float kClipLeftRatio   = 33.0f / 208.0f;
+    constexpr float kClipTopRatio    = 15.0f / 208.0f;
+    constexpr float kClipWidthRatio  = 138.0f / 208.0f;
+    constexpr float kClipHeightRatio = 155.0f / 208.0f;
+
+    const float clipX = x + w * kClipLeftRatio;
+    const float clipY = y + h * kClipTopRatio;
+    const float clipW = std::max(1.0f, w * kClipWidthRatio);
+    const float clipH = std::max(1.0f, h * kClipHeightRatio);
+
+    const float normalizedProfile =
+        std::clamp((profile.scale - 0.82f) / 0.15f, 0.0f, 1.0f);
+    const float smartZoom = 1.00f + normalizedProfile * 0.06f;
+
+    const float baseSize = std::max(clipW, clipH);
+    const float drawSize = baseSize * smartZoom;
+
+    const float centerX = clipX + clipW * 0.5f + profile.offsetX * clipW;
+    const float centerY = clipY + clipH * 0.5f + profile.offsetY * clipH;
+
+    const float dx1 = centerX - drawSize * 0.5f;
+    const float dy1 = centerY - drawSize * 0.5f;
+    const float dx2 = dx1 + drawSize;
+    const float dy2 = dy1 + drawSize;
+
+    ctx->PushScissor(Bounds(clipX, clipY, clipW, clipH));
+
+    ctx->Begin();
+    ctx->GetDrawContext()->BindTexture(0, atlas);
+    ctx->Draw()->DrawTexRect(
+        dx1, dy1, dx2, dy2,
+        u1, v1, u2, v2,
+        0xFFFFFFFF
+    );
+    ctx->Flush();
+
+    ctx->PopScissor();
+    ctx->RebindTexture();
+    ctx->BindFontTexture();
+}
+'''
+
+debug_v059e = (
+    debug_v059e[:start_v059e]
+    + new_renderer_v059e
+    + "\n\n"
+    + debug_v059e[end_v059e:]
+)
+
+source_marker_v059e = "// V0.5.9C HERO PORTRAIT 2X | exact 256x256 Locked-In cells"
+if source_marker_v059e in debug_v059e:
+    debug_v059e = debug_v059e.replace(
+        source_marker_v059e,
+        "// V0.5.9E HOTFIX8 FRAMED PORTRAIT HARD CLIP | PushScissor full 28\n"
+        + source_marker_v059e,
+        1
+    )
+
+debug.write_text(debug_v059e, encoding="utf-8")
+
+check_v059e = debug.read_text(encoding="utf-8")
+required_v059e = (
+    "V0.5.9E HOTFIX8 FRAMED PORTRAIT HARD CLIP",
+    "ctx->PushScissor(Bounds(clipX, clipY, clipW, clipH));",
+    "ctx->PopScissor();",
+    "kClipLeftRatio",
+    "kClipWidthRatio",
+    "const float smartZoom",
+    "GetSCBDFinalHeroProfileV059D(safeIndex)",
+)
+missing_v059e = [m for m in required_v059e if m not in check_v059e]
+if missing_v059e:
+    raise SystemExit(f"V0.5.9E safety missing: {missing_v059e}")
+
+if check_v059e.count("static void DrawSCBDFinalHeroPortraitV059C(") != 1:
+    raise SystemExit("V0.5.9E safety: hero renderer count != 1")
+
+with info.open("a", encoding="utf-8") as f:
+    f.write(
+        "\nPSP Live FloGB V0.5.9E HOTFIX8 Framed Portrait Clip28\n"
+        "Hard GPU scissor clips large portrait inside approved frame window\n"
+        "Square source aspect ratio preserved with smart-cover crop\n"
+        "Full 28 V0.5.9D character profiles retained\n"
+        "No change to pick mapping, bridge, timeout, ranking or Top5\n"
+    )
+
 print("PSP Live FloGB V0.5.8C patch applied successfully.")
