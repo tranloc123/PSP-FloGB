@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import shutil
 
 if len(sys.argv) != 2:
     raise SystemExit("Usage: apply_psp_live_flogb_v0_5_8c.py <ppsspp_repo>")
@@ -1304,6 +1305,259 @@ with info.open("a", encoding="utf-8") as f:
         "Commands: PING / WINNER / PICK / TIMEOUT / CANCEL\n"
         "PICK carries characterId + character in one validated packet\n"
         "Native returns ACK for end-to-end health checks\n"
+    )
+
+
+# -----------------------------------------------------------------------------
+# V0.5.9C HERO PORTRAIT 2X
+# -----------------------------------------------------------------------------
+builder_root_v059c = Path(__file__).resolve().parent.parent
+hero_src_v059c = builder_root_v059c / "branding" / "SCBD_pick_hero_exact_v059c.png"
+if not hero_src_v059c.is_file():
+    raise SystemExit(
+        "V0.5.9C missing branding/SCBD_pick_hero_exact_v059c.png. "
+        "Upload the branding asset together with the patcher."
+    )
+
+hero_dst_dir_v059c = repo / "assets" / "scbd" / "winner_asset_v059c"
+hero_dst_dir_v059c.mkdir(parents=True, exist_ok=True)
+hero_dst_v059c = hero_dst_dir_v059c / "hero_portraits_exact_2x.png"
+shutil.copy2(hero_src_v059c, hero_dst_v059c)
+
+debug_v059c = debug.read_text(encoding="utf-8")
+
+old_state_v059c = '''static Draw::Texture *g_scbdWinnerPickAtlasV058C = nullptr;
+static bool g_scbdWinnerPickAtlasV058CAttempted = false;
+'''
+new_state_v059c = '''static Draw::Texture *g_scbdWinnerPickAtlasV058C = nullptr;
+static bool g_scbdWinnerPickAtlasV058CAttempted = false;
+
+// V0.5.9C: 256x256 per character, only for the large Locked-In portrait.
+static Draw::Texture *g_scbdWinnerHeroAtlasV059C = nullptr;
+static bool g_scbdWinnerHeroAtlasV059CAttempted = false;
+'''
+if debug_v059c.count(old_state_v059c) != 1:
+    raise SystemExit("V0.5.9C hero state anchor missing")
+debug_v059c = debug_v059c.replace(old_state_v059c, new_state_v059c, 1)
+
+loader_anchor_v059c = '''static Draw::Texture *GetSCBDWinnerKratosSplash(UIContext *ctx) {'''
+hero_loader_v059c = r'''static Draw::Texture *GetSCBDWinnerHeroAtlasV059C(UIContext *ctx) {
+    if (!g_scbdWinnerHeroAtlasV059C && !g_scbdWinnerHeroAtlasV059CAttempted) {
+        g_scbdWinnerHeroAtlasV059CAttempted = true;
+        g_scbdWinnerHeroAtlasV059C = CreateTextureFromFile(
+            ctx->GetDrawContext(),
+            "scbd/winner_asset_v059c/hero_portraits_exact_2x.png",
+            ImageFileType::PNG,
+            false,
+            2048,
+            1024
+        );
+    }
+    return g_scbdWinnerHeroAtlasV059C;
+}
+
+'''
+if debug_v059c.count(loader_anchor_v059c) != 1:
+    raise SystemExit("V0.5.9C loader anchor missing")
+debug_v059c = debug_v059c.replace(loader_anchor_v059c, hero_loader_v059c + loader_anchor_v059c, 1)
+
+draw_anchor_v059c = '''static void DrawSCBDFinalKratosSplash(
+'''
+hero_draw_v059c = r'''static void DrawSCBDFinalHeroPortraitV059C(
+    UIContext *ctx,
+    int index,
+    float x,
+    float y,
+    float w,
+    float h
+) {
+    Draw::Texture *atlas = GetSCBDWinnerHeroAtlasV059C(ctx);
+    if (!atlas)
+        return;
+
+    constexpr int kCols = 7;
+    constexpr int kRows = 4;
+    constexpr float kAtlasW = 1792.0f;
+    constexpr float kAtlasH = 1024.0f;
+    constexpr float kInsetPx = 1.25f;
+
+    const int safeIndex = std::clamp(index, 0, 27);
+    const int col = safeIndex % kCols;
+    const int row = safeIndex / kCols;
+
+    const float u1 = (static_cast<float>(col) * 256.0f + kInsetPx) / kAtlasW;
+    const float v1 = (static_cast<float>(row) * 256.0f + kInsetPx) / kAtlasH;
+    const float u2 = (static_cast<float>(col + 1) * 256.0f - kInsetPx) / kAtlasW;
+    const float v2 = (static_cast<float>(row + 1) * 256.0f - kInsetPx) / kAtlasH;
+
+    ctx->Flush();
+    ctx->Begin();
+    ctx->GetDrawContext()->BindTexture(0, atlas);
+    ctx->Draw()->DrawTexRect(
+        x, y, x + w, y + h,
+        u1, v1, u2, v2,
+        0xFFFFFFFF
+    );
+    ctx->Flush();
+    ctx->RebindTexture();
+    ctx->BindFontTexture();
+}
+
+'''
+if debug_v059c.count(draw_anchor_v059c) != 1:
+    raise SystemExit("V0.5.9C hero draw anchor missing")
+debug_v059c = debug_v059c.replace(draw_anchor_v059c, hero_draw_v059c + draw_anchor_v059c, 1)
+
+old_big_v059c = r'''            // IMPORTANT: characterId is the exact /pick 1..28 portrait index.
+            // Do not special-case any numeric slot as Kratos.
+            // Legacy preflight marker only:
+            // s.characterId == 14 || s.character == "KRATOS"
+            if (s.character == "KRATOS") {
+                DrawSCBDFinalKratosSplash(
+                    ctx,
+                    X(portraitX - 2.0f), Y(portraitY - 10.0f),
+                    W(portraitW + 4.0f), H(portraitH + 20.0f)
+                );
+            } else {
+                DrawSCBDFinalAtlasPortrait(
+                    ctx,
+                    atlasIndex,
+                    X(portraitX), Y(portraitY),
+                    W(portraitW), H(portraitH)
+                );
+            }
+'''
+new_big_v059c = r'''            // IMPORTANT: characterId is the exact /pick 1..28 portrait index.
+            // Legacy preflight marker only:
+            // s.characterId == 14 || s.character == "KRATOS"
+            //
+            // V0.5.9C: every fighter uses the dedicated 256x256 hero cell.
+            DrawSCBDFinalHeroPortraitV059C(
+                ctx,
+                atlasIndex,
+                X(portraitX), Y(portraitY),
+                W(portraitW), H(portraitH)
+            );
+'''
+if debug_v059c.count(old_big_v059c) != 1:
+    raise SystemExit(
+        f"V0.5.9C expected exactly one active large portrait block, "
+        f"found {debug_v059c.count(old_big_v059c)}"
+    )
+debug_v059c = debug_v059c.replace(old_big_v059c, new_big_v059c, 1)
+
+bridge_marker = "// V0.5.9A NATIVE LIVE BRIDGE | UDP 127.0.0.1:8796"
+if bridge_marker in debug_v059c:
+    debug_v059c = debug_v059c.replace(
+        bridge_marker,
+        "// V0.5.9C HERO PORTRAIT 2X | exact 256x256 Locked-In cells\n" + bridge_marker,
+        1
+    )
+
+debug.write_text(debug_v059c, encoding="utf-8")
+
+check_v059c = debug.read_text(encoding="utf-8")
+required_v059c = (
+    "V0.5.9C HERO PORTRAIT 2X",
+    "winner_asset_v059c/hero_portraits_exact_2x.png",
+    "GetSCBDWinnerHeroAtlasV059C",
+    "DrawSCBDFinalHeroPortraitV059C",
+    "constexpr float kAtlasW = 1792.0f;",
+    "constexpr float kAtlasH = 1024.0f;",
+    "kInsetPx = 1.25f",
+    "DrawSCBDFinalRoster",
+    "GetSCBDWinnerPickAtlasV058C",
+)
+missing_v059c = [m for m in required_v059c if m not in check_v059c]
+if missing_v059c:
+    raise SystemExit(f"V0.5.9C safety missing: {missing_v059c}")
+
+stage_a_v059c = check_v059c.index(
+    "    } else if (s.phase == SCBDNativeWinner::Phase::PICK_SUCCESS) {"
+)
+stage_b_v059c = check_v059c.index(
+    "    } else if (s.phase == SCBDNativeWinner::Phase::TIMEOUT) {",
+    stage_a_v059c
+)
+pick_success_v059c = check_v059c[stage_a_v059c:stage_b_v059c]
+if "DrawSCBDFinalHeroPortraitV059C(" not in pick_success_v059c:
+    raise SystemExit("V0.5.9C safety: hero portrait not used in PICK_SUCCESS")
+
+with info.open("a", encoding="utf-8") as f:
+    f.write(
+        "\nPSP Live FloGB V0.5.9C Hero Portrait 2X\n"
+        "Dedicated Locked-In atlas: 1792x1024, 28 exact 256x256 cells\n"
+        "Small 28-slot roster remains on the lightweight atlas\n"
+        "Large portrait uses characterId directly, same /pick 1..28 mapping\n"
+        "UV inset added to prevent bilinear cell bleed\n"
+        "No ranking/BXH mapping changes\n"
+    )
+
+
+# -----------------------------------------------------------------------------
+# V0.5.9D HOTFIX7 FULL 28 SMART PORTRAIT
+#
+# Goal:
+# Keep the big character portrait fully inside the LOCKED IN frame while still
+# looking dynamic. Every fighter gets its own scale + X/Y offset profile.
+# This is a data-driven layout polish pass only; /pick mapping and resolver stay
+# exactly the same as V0.5.9B/V0.5.9C.
+# -----------------------------------------------------------------------------
+debug_v059d = debug.read_text(encoding="utf-8")
+
+old_helper_v059d = 'static void DrawSCBDFinalHeroPortraitV059C(\n    UIContext *ctx,\n    int index,\n    float x,\n    float y,\n    float w,\n    float h\n) {\n    Draw::Texture *atlas = GetSCBDWinnerHeroAtlasV059C(ctx);\n    if (!atlas)\n        return;\n\n    constexpr int kCols = 7;\n    constexpr int kRows = 4;\n    constexpr float kAtlasW = 1792.0f;\n    constexpr float kAtlasH = 1024.0f;\n    constexpr float kInsetPx = 1.25f;\n\n    const int safeIndex = std::clamp(index, 0, 27);\n    const int col = safeIndex % kCols;\n    const int row = safeIndex / kCols;\n\n    const float u1 = (static_cast<float>(col) * 256.0f + kInsetPx) / kAtlasW;\n    const float v1 = (static_cast<float>(row) * 256.0f + kInsetPx) / kAtlasH;\n    const float u2 = (static_cast<float>(col + 1) * 256.0f - kInsetPx) / kAtlasW;\n    const float v2 = (static_cast<float>(row + 1) * 256.0f - kInsetPx) / kAtlasH;\n\n    ctx->Flush();\n    ctx->Begin();\n    ctx->GetDrawContext()->BindTexture(0, atlas);\n    ctx->Draw()->DrawTexRect(\n        x, y, x + w, y + h,\n        u1, v1, u2, v2,\n        0xFFFFFFFF\n    );\n    ctx->Flush();\n    ctx->RebindTexture();\n    ctx->BindFontTexture();\n}\n'
+new_helper_v059d = 'struct SCBDFinalHeroProfileV059D {\n    float scale;\n    float offsetX;\n    float offsetY;\n};\n\nstatic const SCBDFinalHeroProfileV059D kSCBDFinalHeroProfilesV059D[28] = {\n    {0.88f,  0.00f, -0.03f}, //  1 YOSHIMITSU\n    {0.94f,  0.01f, -0.02f}, //  2 SETSUKA\n    {0.87f,  0.03f, -0.01f}, //  3 VOLDO\n    {0.93f,  0.00f, -0.02f}, //  4 CASSANDRA\n    {0.89f,  0.01f, -0.01f}, //  5 LIZARDMAN\n    {0.95f,  0.00f, -0.02f}, //  6 TAKI\n    {0.92f,  0.00f, -0.02f}, //  7 MITSURUGI\n    {0.86f, -0.01f, -0.03f}, //  8 ALGOL\n    {0.94f,  0.00f, -0.02f}, //  9 SOPHITIA\n    {0.91f,  0.01f, -0.01f}, // 10 TIRA\n    {0.87f,  0.01f, -0.03f}, // 11 SIEGFRIED\n    {0.93f,  0.00f, -0.03f}, // 12 HILDE\n    {0.90f,  0.01f, -0.02f}, // 13 DAMPIERRE\n    {0.88f, -0.01f, -0.03f}, // 14 KRATOS\n    {0.84f,  0.00f, -0.04f}, // 15 NIGHTMARE\n    {0.95f,  0.00f, -0.02f}, // 16 XIANGHUA\n    {0.92f,  0.01f, -0.02f}, // 17 MAXI\n    {0.92f,  0.01f, -0.02f}, // 18 RAPHAEL\n    {0.82f,  0.00f, -0.04f}, // 19 ASTAROTH\n    {0.93f,  0.00f, -0.02f}, // 20 YUN-SEONG\n    {0.92f,  0.00f, -0.02f}, // 21 KILIK\n    {0.88f, -0.01f, -0.03f}, // 22 IVY\n    {0.96f,  0.00f, -0.01f}, // 23 AMY\n    {0.82f,  0.00f, -0.04f}, // 24 ROCK\n    {0.97f,  0.00f, -0.01f}, // 25 TALIM\n    {0.89f,  0.00f, -0.03f}, // 26 SEONG MI-NA\n    {0.88f,  0.01f, -0.03f}, // 27 CERVANTES\n    {0.86f,  0.00f, -0.04f}, // 28 ZASALAMEL\n};\n\nstatic const SCBDFinalHeroProfileV059D &GetSCBDFinalHeroProfileV059D(int index) {\n    return kSCBDFinalHeroProfilesV059D[std::clamp(index, 0, 27)];\n}\n\nstatic void DrawSCBDFinalHeroPortraitV059C(\n    UIContext *ctx,\n    int index,\n    float x,\n    float y,\n    float w,\n    float h\n) {\n    Draw::Texture *atlas = GetSCBDWinnerHeroAtlasV059C(ctx);\n    if (!atlas)\n        return;\n\n    constexpr int kCols = 7;\n    constexpr float kAtlasW = 1792.0f;\n    constexpr float kAtlasH = 1024.0f;\n    constexpr float kInsetPx = 1.25f;\n\n    const int safeIndex = std::clamp(index, 0, 27);\n    const int col = safeIndex % kCols;\n    const int row = safeIndex / kCols;\n    const auto &profile = GetSCBDFinalHeroProfileV059D(safeIndex);\n\n    const float u1 = (static_cast<float>(col) * 256.0f + kInsetPx) / kAtlasW;\n    const float v1 = (static_cast<float>(row) * 256.0f + kInsetPx) / kAtlasH;\n    const float u2 = (static_cast<float>(col + 1) * 256.0f - kInsetPx) / kAtlasW;\n    const float v2 = (static_cast<float>(row + 1) * 256.0f - kInsetPx) / kAtlasH;\n\n    // Safe area inside the ornate portrait frame. This keeps the render fully\n    // inside the gold border even on extreme fighters such as Nightmare/Rock.\n    const float framePadX = w * 0.055f;\n    const float framePadTop = h * 0.040f;\n    const float framePadBottom = h * 0.085f;\n    const float innerX = x + framePadX;\n    const float innerY = y + framePadTop;\n    const float innerW = std::max(1.0f, w - framePadX * 2.0f);\n    const float innerH = std::max(1.0f, h - framePadTop - framePadBottom);\n\n    const float drawW = innerW * profile.scale;\n    const float drawH = innerH * profile.scale;\n    const float centerX = innerX + innerW * 0.5f + profile.offsetX * innerW;\n    const float centerY = innerY + innerH * 0.5f + profile.offsetY * innerH;\n    const float dx1 = centerX - drawW * 0.5f;\n    const float dy1 = centerY - drawH * 0.5f;\n    const float dx2 = dx1 + drawW;\n    const float dy2 = dy1 + drawH;\n\n    ctx->Flush();\n    ctx->Begin();\n    ctx->GetDrawContext()->BindTexture(0, atlas);\n    ctx->Draw()->DrawTexRect(dx1, dy1, dx2, dy2, u1, v1, u2, v2, 0xFFFFFFFF);\n    ctx->Flush();\n    ctx->RebindTexture();\n    ctx->BindFontTexture();\n}\n'
+
+if debug_v059d.count(old_helper_v059d) != 1:
+    raise SystemExit(f"V0.5.9D expected one old hero helper, found {debug_v059d.count(old_helper_v059d)}")
+debug_v059d = debug_v059d.replace(old_helper_v059d, new_helper_v059d, 1)
+
+marker_v059d = "// V0.5.9C HERO PORTRAIT 2X | exact 256x256 Locked-In cells"
+if marker_v059d in debug_v059d and "V0.5.9D HOTFIX7 FULL 28 SMART PORTRAIT" not in debug_v059d:
+    debug_v059d = debug_v059d.replace(
+        marker_v059d,
+        "// V0.5.9D HOTFIX7 FULL 28 SMART PORTRAIT | per-character fit profiles\n" + marker_v059d,
+        1,
+    )
+
+debug.write_text(debug_v059d, encoding="utf-8")
+
+check_v059d = debug.read_text(encoding="utf-8")
+required_v059d = (
+    "V0.5.9D HOTFIX7 FULL 28 SMART PORTRAIT",
+    "struct SCBDFinalHeroProfileV059D",
+    "kSCBDFinalHeroProfilesV059D[28]",
+    "GetSCBDFinalHeroProfileV059D",
+    "framePadX = w * 0.055f",
+    "framePadTop = h * 0.040f",
+    "framePadBottom = h * 0.085f",
+    "profile.scale",
+    "profile.offsetX",
+    "profile.offsetY",
+    "DrawSCBDFinalHeroPortraitV059C(",
+)
+missing_v059d = [m for m in required_v059d if m not in check_v059d]
+if missing_v059d:
+    raise SystemExit(f"V0.5.9D safety missing: {missing_v059d}")
+
+stage_a_v059d = check_v059d.index(
+    "    } else if (s.phase == SCBDNativeWinner::Phase::PICK_SUCCESS) {"
+)
+stage_b_v059d = check_v059d.index(
+    "    } else if (s.phase == SCBDNativeWinner::Phase::TIMEOUT) {",
+    stage_a_v059d,
+)
+pick_success_v059d = check_v059d[stage_a_v059d:stage_b_v059d]
+if "DrawSCBDFinalHeroPortraitV059C(" not in pick_success_v059d:
+    raise SystemExit("V0.5.9D safety: PICK_SUCCESS lost hero portrait call")
+
+with info.open("a", encoding="utf-8") as f:
+    f.write(
+        "\nPSP Live FloGB V0.5.9D HOTFIX7 Full 28 Smart Portrait\n"
+        "Portrait frame now uses full 28 per-character fit profiles\n"
+        "Each character gets scale + offsetX + offsetY tuning\n"
+        "Smart fit keeps the large portrait inside the LOCKED IN frame\n"
+        "No changes to /pick mapping, ranking, or bridge transport\n"
     )
 
 print("PSP Live FloGB V0.5.8C patch applied successfully.")
